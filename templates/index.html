@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MIDSnap: Photostrip Maker</title>
+<link href="https://fonts.googleapis.com/css2?family=Rubik:wght@500;600;700&family=Lilita+One&family=Montserrat:ital,wght@0,600;0,700;0,800;1,500;1,700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/app.css', v=asset_v) }}">
+<style id="pstyle"></style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+ <linearGradient id="gB" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#46aaff"/><stop offset="1" stop-color="#0d3fd0"/></linearGradient>
+ <linearGradient id="gP" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b043c2"/><stop offset="1" stop-color="#34095f"/></linearGradient>
+ <symbol id="star" viewBox="0 0 100 100"><polygon points="50,8 61.8,35.8 91.8,38.4 69,58.2 75.9,87.6 50,72 24.1,87.6 31,58.2 8.2,38.4 38.2,35.8" fill="url(#gB)" stroke="url(#gB)" stroke-width="12" stroke-linejoin="round"/></symbol>
+ <symbol id="clover" viewBox="-62 -62 124 124"><g fill="url(#gP)" stroke="url(#gP)" stroke-width="4" stroke-linejoin="round">
+  <path id="petal" d="M0 4 C-34 -4 -40 -52 -16 -54 C-6 -55 0 -48 0 -42 C0 -48 6 -55 16 -54 C40 -52 34 -4 0 4Z"/>
+  <use href="#petal" transform="rotate(90)"/><use href="#petal" transform="rotate(180)"/><use href="#petal" transform="rotate(270)"/></g></symbol>
+ <symbol id="sparkle" viewBox="-50 -50 100 100"><path d="M0-48C4-14 14-4 48 0 14 4 4 14 0 48-4 14-14 4-48 0-14-4-4-14 0-48Z" fill="url(#gP)" stroke="url(#gP)" stroke-width="3" stroke-linejoin="round"/></symbol>
+ <symbol id="flower" viewBox="-60 -60 120 120"><g fill="url(#gB)"><ellipse id="fp" cx="0" cy="-27" rx="16" ry="27"/><use href="#fp" transform="rotate(72)"/><use href="#fp" transform="rotate(144)"/><use href="#fp" transform="rotate(216)"/><use href="#fp" transform="rotate(288)"/></g><circle r="11" fill="#fff"/></symbol>
+</defs></svg>
+<div class="bgd" id="bgd" aria-hidden="true"></div>
+<div id="flash" aria-hidden="true"></div>
+
+<header class="hero">
+ <div class="hero-in"><img class="logo" alt="DOST-UGE logo" src="{{ url_for('static', filename='img/logo.png') }}"><h1>MIDSnap<small>: Photostrip Maker</small></h1></div>
+ <svg class="deco fl st1" style="--d:5s" viewBox="0 0 100 100"><use href="#star"/></svg><svg class="deco fl st2" style="--d:6.5s" viewBox="-50 -50 100 100"><use href="#sparkle"/></svg>
+</header>
+<div class="wrap">
+
+<div class="panel">
+ <div class="card" id="cFrame"><div class="ch">Frame</div><div class="cb">
+  <div class="row frow"><div class="fth" id="fthumb"></div><div class="zc"><div class="rb">
+   <button class="main sm" id="fb">Import SVG frame</button><button class="sm" id="fclr">Clear frame</button><input type="file" id="ff" accept=".svg,image/svg+xml" hidden>
+  </div></div></div>
+  <p id="fs" class="hint" aria-live="polite">No frame yet. Green (#00FF00) areas are treated as photo placeholders. The frame always fills the strip (edges may be cropped).</p>
+ </div><svg class="deco fl d-a" style="--d:6s" viewBox="-50 -50 100 100"><use href="#sparkle"/></svg><svg class="deco fl d-g" style="--d:5s" viewBox="0 0 100 100"><use href="#star"/></svg></div>
+ <div class="card" id="cPhotos"><div class="ch">Photos</div><div class="cb">
+  <div id="slots"><p class="hint">Rows appear after you import a frame.</p></div>
+  <div class="drop" id="drop" tabindex="0" role="button">Choose or drop photos here<br><small>PNG or JPG, filled into empty rows first. Drag a photo in the preview to move it, scroll to zoom. Drag a whole row (or use ↑ ↓) to swap rows.</small></div>
+  <input type="file" id="multi" accept="image/png,image/jpeg" multiple hidden>
+  <div class="btns" id="pbtns" style="margin-top:10px"><button class="sm" id="clr">Clear all photos</button></div>
+ </div><svg class="deco fl d-b" style="--d:7s" viewBox="-60 -60 120 120"><use href="#flower"/></svg></div>
+ <div class="card" id="cOut"><div class="ch">Output</div><div class="cb">
+  <div class="sub">Print details <button class="sm" id="pdreset">Reset to defaults</button></div>
+  <div class="orow"><span>Paper size</span><b>4 in × 6 in (North American)</b></div>
+  <div class="orow"><label for="pfmt">Image form</label><select id="pfmt"></select></div>
+  <div class="orow"><label for="pcopies">Number of copies</label><div class="nn"><button type="button" class="nb" id="pcm" aria-label="Fewer copies">&minus;</button><input type="number" id="pcopies" min="1" max="99" step="1" value="1"><button type="button" class="nb" id="pcp" aria-label="More copies">+</button></div></div>
+  <div class="orow"><label for="ppaper">Paper type</label><select id="ppaper"></select></div>
+  <div class="orow"><label for="pq">Quality</label><select id="pq"></select></div>
+  <div class="orow"><label for="pbl">Borderless Margin</label><input type="checkbox" id="pbl"></div>
+  <div class="orow"><label for="pask">Remind me before printing</label><input type="checkbox" id="pask"></div>
+    <p id="os" class="hint os" aria-live="polite"></p>
+ </div><svg class="deco fl clv" style="--d:7s" viewBox="-62 -62 124 124"><use href="#clover"/></svg><svg class="deco fl d-f" style="--d:6s" viewBox="-50 -50 100 100"><use href="#sparkle"/></svg></div>
+ 
+</div>
+
+<div class="col2"><div class="snapwrap"><div class="stage" id="stage">
+ <div class="sh" id="sh"><span class="ttl">Preview</span>
+  <span class="wbs"><button class="wb" id="bmin" aria-label="Minimize" title="Minimize"></button></span></div>
+ <div id="sbw"><div id="sb"><canvas id="cv" width="714" height="1064" aria-label="Photostrip preview"></canvas></div></div>
+</div>
+<button class="main snap" id="end" data-tip="Send this strip to MIDSnapped" aria-label="MIDSnap-it: send this strip to MIDSnapped"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.6-2.4h6.8L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.6"/></svg><span>MIDSnap-it</span></button></div></div>
+<svg class="deco fl d-e" style="--d:6.5s" viewBox="0 0 100 100"><use href="#star"/></svg></div>
+</div>
+
+<section class="sect"><div class="card" id="cReady"><div class="ch">MIDSnapped</div><div class="cb">
+ <div class="rempty" id="qempty"><span>🎞️</span>Nothing MIDSnapped yet<small>Press MIDSnap-it to send a strip here</small></div>
+ <div class="qpd" id="qpd"></div>
+ <div id="qlist"></div>
+ <p id="qs" class="hint os" aria-live="polite"></p>
+</div><svg class="deco fl d-g" style="--d:6s" viewBox="0 0 100 100"><use href="#star"/></svg></div></section>
+
+<section class="sect"><div class="card" id="cRecent"><div class="ch">Recent strips</div><div class="cb">
+ <div class="rempty" id="rempty"><span>😢</span>No recent strips yet</div>
+ <div class="rhead" id="rhead"><span class="lbl">Last 5</span><span class="hint" style="margin:0">Click a strip to reopen</span></div>
+ <div class="rlist" id="rlist"></div>
+ <div class="btns" id="rcb" style="margin-top:12px"><button class="sm" id="rclr">Clear recent strips</button></div>
+</div><svg class="deco fl d-c" style="--d:5.5s" viewBox="0 0 100 100"><use href="#star"/></svg></div><svg class="deco fl d-i" style="--d:7s" viewBox="-50 -50 100 100"><use href="#sparkle"/></svg></section>
+
+<section class="sect"><details class="card hist" id="hist"><summary id="hsum"><span>Photo log</span><span class="wbs"><button class="wb" id="hbtn" type="button"></button></span></summary>
+ <div class="hbw"><div class="hb">
+  <p class="cap">In progress</p><div class="stats" id="live"></div>
+  <p class="cap">Finished</p><div class="stats" id="stats"></div>
+  <div class="btns" style="margin:0"><button class="sm" id="csv">Download CSV</button><button class="sm" id="txt">Download text report</button><button class="sm" id="ch">Clear photo log</button></div>
+  <div class="tw"><table id="log"></table></div>
+ </div></div>
+</details><svg class="deco fl d-h" style="--d:6s" viewBox="-60 -60 120 120"><use href="#flower"/></svg></section>
+
+<dialog id="pdlg"><div class="ch">Before you print</div><div class="cb">
+ <p class="hint" style="margin:0">The 4 × 6 in paper size is set by this page. Browsers can't change the paper type or quality, so make sure these are chosen in the print window that opens next:</p>
+ <table class="pdt" id="pdt"></table>
+ <label class="chk2" style="margin-top:12px"><input type="checkbox" id="pdno"> Don't show this again</label>
+ <div class="btns" style="margin-top:6px"><button class="main sm" id="pdgo">Print</button><button class="sm" id="pdcancel">Cancel</button></div>
+</div></dialog>
+<dialog id="cdlg"><div class="ch" id="cdt">Confirm</div><div class="cb">
+ <p class="hint" id="cdm" style="margin:0;color:var(--ink);font-size:14px"></p>
+ <div class="btns" style="margin-top:14px"><button class="main sm" id="cdok">OK</button><button class="sm" id="cdno">Cancel</button></div>
+</div></dialog>
+<div id="pr"></div>
+
+<script id="boot" type="application/json">{{ boot|tojson }}</script>
+<script src="{{ url_for('static', filename='js/app.js', v=asset_v) }}"></script>
+</body>
+</html>

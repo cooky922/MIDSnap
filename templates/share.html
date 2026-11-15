@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<title>Your MIDSnap photostrip</title>
+<link href="https://fonts.googleapis.com/css2?family=Rubik:wght@500;600;700&family=Lilita+One&family=Montserrat:ital,wght@0,600;0,700;0,800;1,500;1,700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/app.css', v=asset_v) }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/share.css', v=asset_v) }}">
+</head>
+<body>
+<header class="hero"><div class="hero-in"><img class="logo" alt="DOST-UGE logo" src="{{ url_for('static', filename='img/logo.png') }}"><h1>MIDSnap<small>: Photostrip Maker</small></h1></div></header>
+<main class="sc">
+ <div class="card"><div class="ch">Your photostrip</div><div class="cb sc-b">
+  <img class="sc-img" src="{{ url_for('share_image', token=token) }}" alt="Your MIDSnap photostrip">
+  <a class="dl" href="{{ url_for('share_download', token=token) }}">Download photostrip</a>
+  <p class="hint sc-note">Save it to your phone before this link expires on <time id="exp" datetime="{{ expires_iso }}">{{ expires_text }}</time>.</p>
+ </div></div>
+</main>
+<script>
+(function(){var t=document.getElementById('exp'),d=new Date(t.getAttribute('datetime'));
+if(!isNaN(d))t.textContent=d.toLocaleString([],{dateStyle:'medium',timeStyle:'short'})})();
+</script>
+</body>
+</html>

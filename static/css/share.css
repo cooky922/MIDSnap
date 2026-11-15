@@ -1,0 +1,11 @@
+/* customer download page: reuses the app's palette, fonts and cards */
+.sc{max-width:520px;margin:0 auto;padding:24px 16px 40px}
+.sc-b{display:grid;justify-items:center;gap:16px}
+.sc-img{width:100%;max-width:320px;height:auto;border-radius:3px;box-shadow:0 8px 28px rgba(60,30,140,.25);display:block}
+a.dl{display:flex;align-items:center;justify-content:center;width:100%;max-width:320px;min-height:56px;padding:12px 22px;border-radius:10px;
+ color:#fff;text-decoration:none;font-weight:800;font-size:18px;letter-spacing:.06em;text-transform:uppercase;
+ background:linear-gradient(90deg,var(--pur),#3a2aa8);transition:filter .15s,transform .15s}
+a.dl:hover{filter:brightness(1.12);transform:translateY(1px)}
+a.dl:active{filter:brightness(.95);transform:translateY(2px)}
+.sc-note{text-align:center;margin:0}
+.sc .rempty small{max-width:36ch}
