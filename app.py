@@ -2,10 +2,12 @@
 
 The browser still renders the strips (canvas), exactly as before. This server stores the
 photostrips, the MIDSnapped records (download / print counts + timestamps), the photo log,
-and hosts the customer download links that the QR codes point to (valid for 1 day).
+and hosts the customer download links that the QR codes point to: the high-quality PNG is uploaded to
+Cloudinary and the link stops working after 24 hours (the file is deleted from Cloudinary).
 """
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
@@ -13,11 +15,15 @@ import secrets
 import time
 from datetime import datetime, timedelta, timezone
 
+import cloudinary
+import cloudinary.uploader
 import pymysql
 import pymysql.cursors
 from dotenv import load_dotenv
 from flask import Flask, Response, abort, g, jsonify, render_template, request
 from werkzeug.exceptions import HTTPException
+
+import printing
 
 load_dotenv()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -29,11 +35,18 @@ DB = dict(
     password=os.getenv('MYSQL_PASSWORD'),
     database=os.getenv('MYSQL_DATABASE'),
 )
-PUBLIC_BASE_URL = os.getenv('PUBLIC_BASE_URL', '').rstrip('/')   # what customers' phones can reach
 STAFF_USER = os.getenv('STAFF_USER', 'staff')
 STAFF_PASSWORD = os.getenv('STAFF_PASSWORD', '')                  # empty = no login (local kiosk)
 SHARE_TTL = timedelta(hours=float(os.getenv('SHARE_TTL_HOURS', '24')))   # 1 day
-RECENT_LIMIT = 5
+
+# Cloudinary: either CLOUDINARY_URL=cloudinary://KEY:SECRET@CLOUD or the three separate variables.
+if os.getenv('CLOUDINARY_CLOUD_NAME'):
+    cloudinary.config(cloud_name=os.getenv('CLOUDINARY_CLOUD_NAME'), api_key=os.getenv('CLOUDINARY_API_KEY'),
+                      api_secret=os.getenv('CLOUDINARY_API_SECRET'), secure=True)
+else:
+    cloudinary.config(secure=True)          # reads CLOUDINARY_URL
+CLOUDINARY_FOLDER = os.getenv('CLOUDINARY_FOLDER', 'midsnap')
+SHARE_MAX_BYTES = int(float(os.getenv('SHARE_MAX_MB', '9.5')) * 1024 * 1024)   # Cloudinary free plan: 10 MB / image
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024
@@ -115,10 +128,6 @@ def _finish(resp):
     if conn is not None:
         (conn.commit if resp.status_code < 400 else conn.rollback)()
     resp.headers.setdefault('X-Content-Type-Options', 'nosniff')
-    if request.path.startswith('/s/'):
-        resp.headers['Cache-Control'] = 'no-store'
-        resp.headers['Referrer-Policy'] = 'no-referrer'
-        resp.headers['X-Robots-Tag'] = 'noindex, nofollow'
     return resp
 
 
@@ -137,8 +146,8 @@ def _close(exc):
 @app.before_request
 def guard():
     p = request.path
-    if p.startswith('/s/') or p.startswith('/static/') or p == '/healthz':
-        return None                                  # customer links + assets are public
+    if p.startswith('/static/') or p == '/healthz':
+        return None                                  # assets are public
     if STAFF_PASSWORD:
         a = request.authorization
         ok = bool(a) and hmac.compare_digest((a.username or '').encode(), STAFF_USER.encode()) \
@@ -164,18 +173,6 @@ def on_error(e):
 
 
 # ----------------------------------------------------------------------------- serializers
-def recent_items():
-    rows = qall('SELECT uid, frame_name, photo_count, layout, created_at FROM snapshots '
-                'WHERE is_recent=1 ORDER BY created_at DESC, id DESC LIMIT %s', (RECENT_LIMIT,))
-    return [{'id': r['uid'], 'ts': ms(r['created_at']), 'name': r['frame_name'], 'n': r['photo_count'],
-             't': f"/api/snaps/{r['uid']}/thumb", 'layout': jl(r['layout'])} for r in rows]
-
-
-def share_url(token):
-    base = PUBLIC_BASE_URL or request.host_url.rstrip('/')
-    return f'{base}/s/{token}'
-
-
 def midsnapped_items(where='', args=()):
     rows = qall(
         'SELECT m.id AS mid, m.download_count, m.print_count, m.last_downloaded_at, m.last_printed_at, '
@@ -191,8 +188,8 @@ def midsnapped_items(where='', args=()):
                   f'WHERE midsnapped_id IN ({ph}) ORDER BY id', ids):
         (dl if e['kind'] == 'download' else pr).setdefault(e['midsnapped_id'], []).append(ms(e['created_at']))
     links = {}
-    for l in qall(f'SELECT midsnapped_id, token, expires_at FROM share_links WHERE midsnapped_id IN ({ph}) '
-                  f'AND image IS NOT NULL AND expires_at > %s ORDER BY id', ids + [utcnow()]):
+    for l in qall(f'SELECT midsnapped_id, url, expires_at FROM share_links WHERE midsnapped_id IN ({ph}) '
+                  f'AND url IS NOT NULL AND expires_at > %s ORDER BY id', ids + [utcnow()]):
         links[l['midsnapped_id']] = l
     out = []
     for r in rows:
@@ -203,7 +200,7 @@ def midsnapped_items(where='', args=()):
             'dl': r['download_count'], 'pr': r['print_count'],
             'lastDl': ms(r['last_downloaded_at']), 'lastPr': ms(r['last_printed_at']),
             'dlt': dl.get(r['mid'], []), 'prt': pr.get(r['mid'], []),
-            'link': share_url(lk['token']) if lk else None,
+            'link': lk['url'] if lk else None,
             'linkExp': ms(lk['expires_at']) if lk else None,
         })
     return out
@@ -219,33 +216,53 @@ def log_items(where='', args=()):
 
 
 def gc():
-    """Drop snapshots nobody references any more (not recent, not MIDSnapped), then unused frames."""
-    run('DELETE FROM snapshots WHERE is_recent=0 AND id NOT IN (SELECT snapshot_id FROM midsnapped)')
+    """Drop snapshots that are no longer a MIDSnapped record, then frames nobody uses."""
+    run('DELETE FROM snapshots WHERE id NOT IN (SELECT snapshot_id FROM midsnapped)')
     run('DELETE FROM frames WHERE id NOT IN (SELECT frame_id FROM snapshots)')
 
 
-def trim_recent():
-    keep = [r['id'] for r in qall('SELECT id FROM snapshots WHERE is_recent=1 '
-                                  'ORDER BY created_at DESC, id DESC LIMIT %s', (RECENT_LIMIT,))]
-    if keep:
-        run('UPDATE snapshots SET is_recent=0 WHERE is_recent=1 AND id NOT IN (%s)' % ','.join(['%s'] * len(keep)), keep)
+# ----------------------------------------------------------------------------- Cloudinary
+def cloud_ready():
+    c = cloudinary.config()
+    return bool(c.cloud_name and c.api_key and c.api_secret)
 
 
-_last_purge = 0.0
+def cloud_delete(public_ids):
+    """Delete uploaded strips from Cloudinary. Returns the public ids that are now gone."""
+    gone = []
+    for pid in public_ids:
+        try:
+            r = cloudinary.uploader.destroy(pid, resource_type='image', invalidate=True)
+        except Exception:
+            app.logger.exception('Cloudinary delete failed for %s', pid)
+            continue
+        if r.get('result') in ('ok', 'not found'):
+            gone.append(pid)
+    return gone
 
 
 def purge_expired():
-    """Wipe the images of expired links now; forget the link rows a week later."""
+    """Delete expired strips from Cloudinary (a link is only valid for SHARE_TTL), then forget the rows."""
     now = utcnow()
-    run('UPDATE share_links SET image=NULL WHERE expires_at <= %s AND image IS NOT NULL', (now,))
-    run('DELETE FROM share_links WHERE expires_at < %s', (now - timedelta(days=7),))
+    rows = qall('SELECT id, public_id FROM share_links WHERE expires_at <= %s', (now,))
+    gone = set(cloud_delete([r['public_id'] for r in rows if r['public_id']])) if cloud_ready() else set()
+    for r in rows:
+        if not r['public_id'] or r['public_id'] in gone:
+            run('DELETE FROM share_links WHERE id=%s', (r['id'],))
+    return len(rows)
+
+
+_last_purge = 0.0
 
 
 def maybe_purge():
     global _last_purge
     if time.time() - _last_purge > 300:
         _last_purge = time.time()
-        purge_expired()
+        try:
+            purge_expired()
+        except Exception:
+            app.logger.exception('purge failed')
 
 
 def asset_version():
@@ -260,7 +277,8 @@ def asset_version():
 @app.get('/')
 def index():
     maybe_purge()
-    boot = {'midsnapped': midsnapped_items(), 'recent': recent_items(), 'log': log_items()}
+    boot = {'midsnapped': midsnapped_items(), 'log': log_items(), 'print': printing.info(),
+            'share': {'ready': cloud_ready(), 'hours': SHARE_TTL.total_seconds() / 3600, 'max': SHARE_MAX_BYTES}}
     resp = Response(render_template('index.html', boot=boot, asset_v=asset_version()), mimetype='text/html')
     resp.headers['Cache-Control'] = 'no-store'
     return resp
@@ -328,8 +346,8 @@ def create_snap():
     frame_id = fr['id'] if fr else insert(
         'INSERT INTO frames (sha256, name, svg, created_at) VALUES (%s,%s,%s,%s)', (sha, name, frame, now))
     snap_id = insert(
-        'INSERT INTO snapshots (uid, frame_id, frame_name, photo_count, layout, thumb, is_recent, created_at) '
-        'VALUES (%s,%s,%s,%s,%s,%s,1,%s)', (uid, frame_id, name, len(photos), json.dumps(layout), thumb, now))
+        'INSERT INTO snapshots (uid, frame_id, frame_name, photo_count, layout, thumb, created_at) '
+        'VALUES (%s,%s,%s,%s,%s,%s,%s)', (uid, frame_id, name, len(photos), json.dumps(layout), thumb, now))
     for i, mime, data in photos:
         insert('INSERT INTO snapshot_photos (snapshot_id, row_idx, mime, data) VALUES (%s,%s,%s,%s)',
                (snap_id, i, mime, data))
@@ -337,10 +355,8 @@ def create_snap():
     log_id = insert(
         'INSERT INTO photo_log (snapshot_uid, shot_at, frame_name, photo_count, thumb, download_times, print_times) '
         'VALUES (%s,%s,%s,%s,%s,%s,%s)', (uid, now, name, len(photos), thumb, '[]', '[]'))
-    trim_recent()
     gc()
-    return jsonify(midsnapped=midsnapped_items('WHERE s.uid=%s', (uid,))[0],
-                   recent=recent_items(), log=log_items('WHERE id=%s', (log_id,))[0])
+    return jsonify(midsnapped=midsnapped_items('WHERE s.uid=%s', (uid,))[0], log=log_items('WHERE id=%s', (log_id,))[0])
 
 
 def blob_response(data, mime, svg=False):
@@ -384,6 +400,9 @@ def list_midsnapped():
 
 @app.delete('/api/midsnapped/<uid>')
 def delete_midsnapped(uid):
+    cloud_delete([r['public_id'] for r in qall(
+        'SELECT l.public_id FROM share_links l JOIN midsnapped m ON m.id = l.midsnapped_id '
+        'JOIN snapshots s ON s.id = m.snapshot_id WHERE s.uid=%s AND l.public_id IS NOT NULL', (uid,))])
     n = run('DELETE m FROM midsnapped m JOIN snapshots s ON s.id = m.snapshot_id WHERE s.uid=%s', (uid,))
     if not n:
         abort(404, 'That strip is already gone.')
@@ -391,24 +410,9 @@ def delete_midsnapped(uid):
     return '', 204
 
 
-PAPERS, QUALS, FMTS = {'glossy', 'matte'}, {'draft', 'standard', 'high'}, {'png', 'jpg'}
-
-
-def clean_details(d):
-    d = d if isinstance(d, dict) else {}
-    try:
-        copies = max(1, min(99, int(d.get('copies') or 1)))
-    except (TypeError, ValueError):
-        copies = 1
-    return {'fmt': d.get('fmt') if d.get('fmt') in FMTS else 'png', 'copies': copies,
-            'paper': d.get('paper') if d.get('paper') in PAPERS else 'glossy',
-            'quality': d.get('quality') if d.get('quality') in QUALS else 'high',
-            'borderless': bool(d.get('borderless'))}
-
-
 @app.post('/api/midsnapped/<uid>/events')
 def add_event(uid):
-    """Count a download or a print (and log its timestamp)."""
+    """Count a download or a browser print (and log its timestamp)."""
     m = qone('SELECT m.id FROM midsnapped m JOIN snapshots s ON s.id = m.snapshot_id WHERE s.uid=%s', (uid,))
     if not m:
         abort(404, 'That strip is no longer in MIDSnapped.')
@@ -416,21 +420,25 @@ def add_event(uid):
     kind = d.get('kind')
     if kind not in ('download', 'print'):
         abort(400, 'Unknown event.')
-    copies, details, now = 1, None, utcnow()
-    if kind == 'print':
-        try:
-            copies = max(1, min(99, int(d.get('copies') or 1)))
-        except (TypeError, ValueError):
-            copies = 1
-        details = clean_details(d.get('details'))
+    try:
+        copies = max(1, min(99, int(d.get('copies') or 1)))
+    except (TypeError, ValueError):
+        copies = 1
+    return add_event_for(uid, m['id'], kind, copies if kind == 'print' else 1)
+
+
+def add_event_for(uid, mid, kind, copies):
+    """Record a download / print: counters, the event row and the photo log. Prints always use the forced settings."""
+    now = utcnow()
+    details = dict(printing.FORCED, fmt='png', copies=copies) if kind == 'print' else None
     insert('INSERT INTO usage_events (midsnapped_id, kind, copies, details, created_at) VALUES (%s,%s,%s,%s,%s)',
-           (m['id'], kind, copies, json.dumps(details) if details else None, now))
+           (mid, kind, copies, json.dumps(details) if details else None, now))
     if kind == 'download':
         run('UPDATE midsnapped SET download_count = download_count + 1, last_downloaded_at=%s WHERE id=%s',
-            (now, m['id']))
+            (now, mid))
     else:
         run('UPDATE midsnapped SET print_count = print_count + %s, last_printed_at=%s WHERE id=%s',
-            (copies, now, m['id']))
+            (copies, now, mid))
     log = qone('SELECT id, download_times, print_times FROM photo_log WHERE snapshot_uid=%s '
                'ORDER BY id DESC LIMIT 1 FOR UPDATE', (uid,))
     log_out = None
@@ -448,51 +456,70 @@ def add_event(uid):
     return jsonify(midsnapped=midsnapped_items('WHERE s.uid=%s', (uid,))[0], log=log_out)
 
 
-def local_warning():
-    host = (request.host or '').split(':')[0].strip('[]').lower()
-    if not PUBLIC_BASE_URL and host in ('localhost', '127.0.0.1', '::1'):
-        return 'Note: this link points to localhost, so phones cannot open it. Set PUBLIC_BASE_URL on the server.'
-    return ''
-
-
 @app.post('/api/midsnapped/<uid>/share')
 def create_share(uid):
-    """Store the rendered JPG and create a customer download link that expires in 1 day."""
+    """Upload the high-quality PNG to Cloudinary; the link works for SHARE_TTL (24 hours), then it is deleted."""
     maybe_purge()
+    if not cloud_ready():
+        abort(503, 'Cloudinary is not set up. Add CLOUDINARY_URL to the .env file.')
     m = qone('SELECT m.id FROM midsnapped m JOIN snapshots s ON s.id = m.snapshot_id WHERE s.uid=%s', (uid,))
     if not m:
         abort(404, 'That strip is no longer in MIDSnapped.')
-    data = read_upload('image', 25 * 1024 * 1024)
-    if sniff(data) != 'image/jpeg':
-        abort(400, 'The strip image is missing or is not a JPG.')
-    run('DELETE FROM share_links WHERE midsnapped_id=%s', (m['id'],))      # one live link per strip
-    token, now = secrets.token_urlsafe(24), utcnow()                         # 32 URL-safe characters
+    data = read_upload('image', 40 * 1024 * 1024)
+    if sniff(data) != 'image/png':
+        abort(400, 'The strip image is missing or is not a PNG.')
+    if len(data) > SHARE_MAX_BYTES:
+        abort(413, 'The strip image is too large for Cloudinary. Lower SHARE_MAX_MB or render it at a lower dpi.')
+    old = qall('SELECT public_id FROM share_links WHERE midsnapped_id=%s', (m['id'],))
+    token, now = secrets.token_urlsafe(24), utcnow()                         # unguessable public id
     exp = now + SHARE_TTL
-    insert('INSERT INTO share_links (midsnapped_id, token, image, created_at, expires_at) VALUES (%s,%s,%s,%s,%s)',
-           (m['id'], token, data, now, exp))
-    return jsonify(url=share_url(token), expires=ms(exp), warn=local_warning())
+    try:
+        up = cloudinary.uploader.upload(
+            io.BytesIO(data), public_id=token, folder=CLOUDINARY_FOLDER, resource_type='image', type='upload',
+            overwrite=False, unique_filename=False, use_filename=False,
+            tags=['midsnap', 'expires-' + exp.strftime('%Y%m%d%H%M')], context={'expires_at': exp.isoformat() + 'Z'})
+    except Exception as e:
+        app.logger.exception(e)
+        abort(502, 'Cloudinary refused the upload: ' + str(e)[:200])
+    cloud_delete([r['public_id'] for r in old if r['public_id']])            # one live link per strip
+    run('DELETE FROM share_links WHERE midsnapped_id=%s', (m['id'],))
+    insert('INSERT INTO share_links (midsnapped_id, public_id, url, bytes, created_at, expires_at) '
+           'VALUES (%s,%s,%s,%s,%s,%s)', (m['id'], up['public_id'], up['secure_url'], len(data), now, exp))
+    return jsonify(url=up['secure_url'], expires=ms(exp))
 
 
 @app.delete('/api/midsnapped/<uid>/share')
 def delete_share(uid):
-    run('DELETE l FROM share_links l JOIN midsnapped m ON m.id = l.midsnapped_id '
-        'JOIN snapshots s ON s.id = m.snapshot_id WHERE s.uid=%s', (uid,))
+    rows = qall('SELECT l.id, l.public_id FROM share_links l JOIN midsnapped m ON m.id = l.midsnapped_id '
+                'JOIN snapshots s ON s.id = m.snapshot_id WHERE s.uid=%s', (uid,))
+    gone = set(cloud_delete([r['public_id'] for r in rows if r['public_id']]))
+    if any(r['public_id'] and r['public_id'] not in gone for r in rows):
+        abort(502, 'Could not delete the online copy from Cloudinary. Try again.')
+    for r in rows:
+        run('DELETE FROM share_links WHERE id=%s', (r['id'],))
     return '', 204
 
 
-# ---- recent strips
-@app.delete('/api/recent/<uid>')
-def delete_recent(uid):
-    run('UPDATE snapshots SET is_recent=0 WHERE uid=%s', (uid,))
-    gc()
-    return '', 204
-
-
-@app.delete('/api/recent')
-def clear_recent():
-    run('UPDATE snapshots SET is_recent=0 WHERE is_recent=1')
-    gc()
-    return '', 204
+@app.post('/api/midsnapped/<uid>/print')
+def print_strip(uid):
+    """Print from the server with the forced settings (4 x 6 in, glossy photo paper, high quality, borderless)."""
+    m = qone('SELECT m.id FROM midsnapped m JOIN snapshots s ON s.id = m.snapshot_id WHERE s.uid=%s', (uid,))
+    if not m:
+        abort(404, 'That strip is no longer in MIDSnapped.')
+    if printing.backend() is None:
+        abort(501, 'Server printing is not set up. Set PRINT_BACKEND in the .env file.')
+    data = read_upload('image', 40 * 1024 * 1024)
+    if sniff(data) != 'image/png':
+        abort(400, 'The strip image is missing or is not a PNG.')
+    try:
+        copies = max(1, min(99, int(request.form.get('copies') or 1)))
+    except ValueError:
+        copies = 1
+    try:
+        printing.print_png(data, copies)
+    except printing.PrintError as e:
+        abort(502, str(e))
+    return add_event_for(uid, m['id'], 'print', copies)
 
 
 # ---- photo log
@@ -513,63 +540,30 @@ def clear_log():
     return '', 204
 
 
-# ----------------------------------------------------------------------------- customer pages (public)
-def link_state(token):
-    """-> (row, state) with state in 'ok' | 'expired' | 'missing'. Never loads the image."""
-    r = qone('SELECT id, expires_at, (image IS NOT NULL) AS has_image FROM share_links WHERE token=%s', (token,))
-    if not r:
-        return None, 'missing'
-    if r['expires_at'] <= utcnow() or not r['has_image']:
-        return r, 'expired'
-    return r, 'ok'
-
-
-def gone_page(state):
-    if state == 'expired':
-        return render_template('share_gone.html', asset_v=asset_version(), title='This link has expired',
-                               msg='Photostrip links are valid for 1 day. Please ask the MIDSnap staff for a new QR code.'), 410
-    return render_template('share_gone.html', asset_v=asset_version(), title='Link not found',
-                           msg='Check that you scanned the whole QR code, or ask the MIDSnap staff for help.'), 404
-
-
-@app.get('/s/<token>')
-def share_page(token):
-    r, state = link_state(token)
-    if state != 'ok':
-        return gone_page(state)
-    exp = r['expires_at']
-    return render_template('share.html', token=token, asset_v=asset_version(),
-                           expires_iso=exp.strftime('%Y-%m-%dT%H:%M:%SZ'),
-                           expires_text=exp.strftime('%Y-%m-%d %H:%M UTC'))
-
-
-def share_image_row(token):
-    r = qone('SELECT l.image, l.expires_at, s.created_at FROM share_links l '
-             'JOIN midsnapped m ON m.id = l.midsnapped_id JOIN snapshots s ON s.id = m.snapshot_id '
-             'WHERE l.token=%s', (token,))
-    if not r:
-        abort(404)
-    if r['expires_at'] <= utcnow() or not r['image']:
-        abort(410)
-    return r
-
-
-@app.get('/s/<token>/image')
-def share_image(token):
-    return Response(share_image_row(token)['image'], mimetype='image/jpeg')
-
-
-@app.get('/s/<token>/download')
-def share_download(token):
-    r = share_image_row(token)
-    run('UPDATE share_links SET download_count = download_count + 1 WHERE token=%s', (token,))
-    name = f"midsnap-{r['created_at']:%Y%m%d%H%M%S}-102x152mm.jpg"
-    resp = Response(r['image'], mimetype='image/jpeg')
-    resp.headers['Content-Disposition'] = f'attachment; filename="{name}"'
-    return resp
-
-
 # ----------------------------------------------------------------------------- CLI
+def migrate(conn):
+    """Bring a database made by an older version up to date (safe to run again)."""
+    def has_col(t, c):
+        with conn.cursor() as cur:
+            cur.execute('SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() '
+                        'AND table_name=%s AND column_name=%s', (t, c))
+            return cur.fetchone()[0] > 0
+    with conn.cursor() as cur:
+        if not has_col('share_links', 'public_id'):
+            cur.execute('ALTER TABLE share_links ADD COLUMN public_id VARCHAR(255) NULL AFTER token')
+        if not has_col('share_links', 'url'):
+            cur.execute('ALTER TABLE share_links ADD COLUMN url VARCHAR(512) NULL AFTER public_id')
+        if not has_col('share_links', 'bytes'):
+            cur.execute('ALTER TABLE share_links ADD COLUMN bytes INT UNSIGNED NULL AFTER url')
+        if has_col('share_links', 'token'):                      # old local links are gone: Cloudinary replaces them
+            cur.execute('DELETE FROM share_links WHERE url IS NULL')
+            cur.execute('ALTER TABLE share_links DROP COLUMN token')
+        if has_col('share_links', 'image'):
+            cur.execute('ALTER TABLE share_links DROP COLUMN image')
+        if has_col('share_links', 'download_count'):
+            cur.execute('ALTER TABLE share_links DROP COLUMN download_count')
+
+
 @app.cli.command('init-db')
 def init_db_cmd():
     with open(os.path.join(BASE_DIR, 'schema.sql'), encoding='utf-8') as fh:
@@ -579,21 +573,18 @@ def init_db_cmd():
         for stmt in (s.strip() for s in sql.split(';')):
             if stmt:
                 c.execute(stmt)
+    migrate(conn)
     conn.close()
     print('Tables are ready.')
 
 
 @app.cli.command('purge-expired')
 def purge_cmd():
-    """Wipe expired customer links (run from cron, e.g. every 15 minutes)."""
-    conn = pymysql.connect(**DB, charset='utf8mb4', cursorclass=pymysql.cursors.DictCursor, autocommit=True)
-    now = utcnow()
-    with conn.cursor() as c:
-        c.execute('UPDATE share_links SET image=NULL WHERE expires_at <= %s AND image IS NOT NULL', (now,))
-        wiped = c.rowcount
-        c.execute('DELETE FROM share_links WHERE expires_at < %s', (now - timedelta(days=7),))
-    conn.close()
-    print(f'Wiped {wiped} expired image(s).')
+    """Delete expired strips from Cloudinary (run from cron, e.g. every 15 minutes)."""
+    with app.app_context():
+        n = purge_expired()
+        db().commit()
+    print(f'Checked {n} expired link(s).')
 
 
 if __name__ == '__main__':

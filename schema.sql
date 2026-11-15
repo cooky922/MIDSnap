@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS frames (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- One captured photostrip: frame + crop settings + thumbnail. The photos live in snapshot_photos.
--- A snapshot is kept while it is a MIDSnapped record or one of the last 5 "recent strips".
+-- A snapshot is kept while it is a MIDSnapped record (that is what "Edit" reopens).
 CREATE TABLE IF NOT EXISTS snapshots (
   id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   uid          CHAR(16)        NOT NULL,
@@ -23,10 +23,9 @@ CREATE TABLE IF NOT EXISTS snapshots (
   photo_count  TINYINT UNSIGNED NOT NULL,
   layout       JSON            NOT NULL,  -- per row: {has, z, ox, oy}
   thumb        MEDIUMBLOB      NOT NULL,  -- JPEG thumbnail
-  is_recent    TINYINT(1)      NOT NULL DEFAULT 1,
   created_at   DATETIME(3)     NOT NULL,
   UNIQUE KEY uq_snapshots_uid (uid),
-  KEY ix_snapshots_recent (is_recent, created_at),
+  KEY ix_snapshots_created (created_at),
   CONSTRAINT fk_snapshots_frame FOREIGN KEY (frame_id) REFERENCES frames (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -66,17 +65,16 @@ CREATE TABLE IF NOT EXISTS usage_events (
   CONSTRAINT fk_events_midsnapped FOREIGN KEY (midsnapped_id) REFERENCES midsnapped (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Customer download links (the QR code points here). A link is valid for 1 day (expires_at);
--- afterwards the image is wiped (purge) and the link answers "expired".
+-- Customer download links (the QR code points to the Cloudinary URL). The high-quality PNG is uploaded to
+-- Cloudinary and deleted again when the link expires (24 hours by default, SHARE_TTL_HOURS).
 CREATE TABLE IF NOT EXISTS share_links (
   id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   midsnapped_id   BIGINT UNSIGNED NOT NULL,
-  token           CHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,  -- case-sensitive
-  image           LONGBLOB        NULL,   -- rendered JPG, 102 x 152 mm at 300 dpi
+  public_id       VARCHAR(255)    NULL,   -- Cloudinary public id (folder/random id), used to delete the file
+  url             VARCHAR(512)    NULL,   -- Cloudinary secure URL
+  bytes           INT UNSIGNED    NULL,
   created_at      DATETIME(3)     NOT NULL,
   expires_at      DATETIME(3)     NOT NULL,
-  download_count  INT UNSIGNED    NOT NULL DEFAULT 0,
-  UNIQUE KEY uq_share_token (token),
   KEY ix_share_midsnapped (midsnapped_id),
   KEY ix_share_expires (expires_at),
   CONSTRAINT fk_share_midsnapped FOREIGN KEY (midsnapped_id) REFERENCES midsnapped (id) ON DELETE CASCADE

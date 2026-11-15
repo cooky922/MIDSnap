@@ -1,5 +1,5 @@
 const $=id=>document.getElementById(id),cv=$('cv'),clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
-let frame=null,rows=[],sess={dt:[],pt:[],pd:null},drag=null,pend=false,restored=false,busy=false,saveT=0,recent=[],readyQ=[],logCache=[],printTarget=null;
+let frame=null,rows=[],sess={dt:[],pt:[],pd:null},drag=null,pend=false,restored=false,busy=false,saveT=0,readyQ=[],logCache=[],printTarget=null;
 const BOOT=JSON.parse(document.getElementById('boot').textContent);
 /* every change goes to the Flask API (MySQL); the header is a CSRF guard the server checks */
 async function api(method,url,body){const o={method,headers:{'X-MIDSnap':'1'}};
@@ -7,7 +7,20 @@ async function api(method,url,body){const o={method,headers:{'X-MIDSnap':'1'}};
  const r=await fetch(url,o);if(!r.ok){let m='';try{m=(await r.json()).error}catch{}throw new Error(m||`Request failed (${r.status})`)}
  return r.status===204?null:r.json()}
 const say=t=>$('fs').textContent=t;
-const osay=t=>$('os').textContent=t;
+/* ---- toast notifications: every action result (rendering, download, print, errors) shows up here ---- */
+const toastBox=$('toasts');let toastEl=null,toastT=0;
+function toast(t){clearTimeout(toastT);
+ if(!t){if(toastEl){const e=toastEl;toastEl=null;e.classList.add('out');setTimeout(()=>e.remove(),250)}return}
+ const work=/(…|\.\.\.)$/.test(t),bad=/could not|couldn't|cancel|failed|error|refused|not set up|rejected|first\.|too large/i.test(t),
+  kind=work?'work':bad?'bad':'ok';
+ if(!toastEl){toastEl=document.createElement('div');toastBox.append(toastEl)}
+ const e=toastEl;e.className='toast '+kind;e.textContent='';
+ const ic=document.createElement('i');ic.setAttribute('aria-hidden','true');ic.textContent=work?'':kind==='bad'?'!':'✓';
+ const m=document.createElement('span');m.textContent=t;
+ const x=document.createElement('button');x.type='button';x.className='tx';x.textContent='✕';x.setAttribute('aria-label','Dismiss');x.onclick=()=>toast('');
+ e.append(ic,m,x);e.setAttribute('role',bad?'alert':'status');
+ if(!work)toastT=setTimeout(()=>toast(''),bad?7000:4500)}
+const osay=toast;
 const redraw=()=>{if(pend)return;pend=true;requestAnimationFrame(()=>{pend=false;render(cv,true);persist()})};
 const kc={key:'',c:null};
 function askConfirm(title,msg){const d=$('cdlg');if(!d.showModal)return Promise.resolve(confirm(msg));
@@ -17,36 +30,26 @@ function askConfirm(title,msg){const d=$('cdlg');if(!d.showModal)return Promise.
 function snapFx(){const f=$('flash');f.classList.remove('go');void f.offsetWidth;f.classList.add('go')}
 const MM_W=102,MM_H=152;
 
-/* ---- print details (remembered in this browser) ---- */
+/* ---- print details: suggested and fixed (they are shown, but cannot be changed) ---- */
 const SZ={lbl:'4 in × 6 in (North American)',w:'4in',h:'6in',mmw:101.6,mmh:152.4};
 const PAPER={glossy:'Photo Paper - Glossy',matte:'Photo Paper - Matte'};
 const QUAL={draft:'Draft',standard:'Standard',high:'High Quality'};
-const QDPI={draft:[150],standard:[300],high:[600,300]};
 const FMT={png:'PNG',jpg:'JPG'};
-const PD={fmt:'png',copies:1,paper:'glossy',quality:'high',borderless:true,ask:true};
-let prefs={...PD,...(()=>{try{return JSON.parse(localStorage.getItem('ps_print'))||{}}catch{return{}}})()};delete prefs.size;
-const dlLabel=()=>{try{showReady()}catch{}};
-const savePrefs=()=>{try{localStorage.setItem('ps_print',JSON.stringify(prefs))}catch{}dlLabel()};
+const prefs=Object.freeze({fmt:'png',copies:1,paper:'glossy',quality:'high',borderless:true,ask:true});
+const PRINT=BOOT.print||{mode:'browser'},SERVER_PRINT=PRINT.mode==='server';
 const fillSel=(id,o)=>{$(id).innerHTML='';Object.entries(o).forEach(([k,v])=>{const op=document.createElement('option');op.value=k;op.textContent=v;$(id).append(op)})};
 function enhance(id){const sel=$(id),dd=document.createElement('div'),b=document.createElement('button'),ul=document.createElement('ul');
- dd.className='dd';b.type='button';b.className='ddb';b.setAttribute('aria-haspopup','listbox');b.setAttribute('aria-expanded','false');ul.className='ddl';ul.setAttribute('role','listbox');b.innerHTML='<span></span><i></i>';
+ dd.className='dd';b.type='button';b.className='ddb';b.disabled=sel.disabled;b.setAttribute('aria-haspopup','listbox');b.setAttribute('aria-expanded','false');ul.className='ddl';ul.setAttribute('role','listbox');b.innerHTML='<span></span><i></i>';
  const upd=()=>{b.firstChild.textContent=sel.options[sel.selectedIndex]?sel.options[sel.selectedIndex].text:'';[...ul.children].forEach((li,k)=>li.classList.toggle('sel',k===sel.selectedIndex))};
  const close=()=>{dd.classList.remove('open');b.setAttribute('aria-expanded','false')};
  [...sel.options].forEach((o,k)=>{const li=document.createElement('li');li.textContent=o.text;li.setAttribute('role','option');li.onclick=()=>{sel.selectedIndex=k;sel.dispatchEvent(new Event('change'));upd();close()};ul.append(li)});
- b.onclick=e=>{e.stopPropagation();document.querySelectorAll('.dd.open').forEach(x=>{if(x!==dd)x.classList.remove('open')});dd.classList.toggle('open');b.setAttribute('aria-expanded',String(dd.classList.contains('open')))};
- b.onkeydown=e=>{if(e.key==='Escape')close();if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();sel.selectedIndex=clamp(sel.selectedIndex+(e.key==='ArrowDown'?1:-1),0,sel.options.length-1);sel.dispatchEvent(new Event('change'));upd()}};
+ b.onclick=e=>{e.stopPropagation();if(b.disabled)return;document.querySelectorAll('.dd.open').forEach(x=>{if(x!==dd)x.classList.remove('open')});dd.classList.toggle('open');b.setAttribute('aria-expanded',String(dd.classList.contains('open')))};
  document.addEventListener('click',close);sel.hidden=true;sel.after(dd);dd.append(b,ul);sel._dd=upd;upd()}
 fillSel('pfmt',FMT);fillSel('ppaper',PAPER);fillSel('pq',QUAL);['pfmt','ppaper','pq'].forEach(enhance);
-const copyBtns=()=>{const n=+$('pcopies').value||1;$('pcm').disabled=n<=1;$('pcp').disabled=n>=99};
-function syncPrefs(){$('pfmt').value=prefs.fmt;$('ppaper').value=prefs.paper;$('pq').value=prefs.quality;$('pcopies').value=prefs.copies;copyBtns();$('pbl').checked=!!prefs.borderless;$('pask').checked=!!prefs.ask;
- ['pfmt','ppaper','pq'].forEach(i=>$(i)._dd());dlLabel()}
-[['pfmt','fmt'],['ppaper','paper'],['pq','quality']].forEach(([id,k])=>$(id).onchange=()=>{prefs[k]=$(id).value;savePrefs()});
-const setCopies=n=>{n=clamp(Math.round(+n)||1,1,99);$('pcopies').value=n;prefs.copies=n;savePrefs();copyBtns()};
-$('pcopies').onchange=()=>setCopies($('pcopies').value);$('pcm').onclick=()=>setCopies(+$('pcopies').value-1);$('pcp').onclick=()=>setCopies(+$('pcopies').value+1);
-$('pbl').onchange=()=>{prefs.borderless=$('pbl').checked;savePrefs()};
-$('pask').onchange=()=>{prefs.ask=$('pask').checked;savePrefs()};
-$('pdreset').onclick=()=>{prefs={...PD};savePrefs();syncPrefs()};
-syncPrefs();
+$('pfmt').value=prefs.fmt;$('ppaper').value=prefs.paper;$('pq').value=prefs.quality;$('pcopies').value=prefs.copies;$('pbl').checked=prefs.borderless;$('pask').checked=prefs.ask;
+['pfmt','ppaper','pq'].forEach(i=>$(i)._dd());
+$('pnote').textContent=SERVER_PRINT?'These settings are fixed. Printing goes straight to the printer with them'+(PRINT.printer?` (${PRINT.printer})`:'')+'.'
+ :'These settings are fixed, but a browser can\'t apply the paper type or quality by itself. You\'ll be reminded to choose them in the print window.';
 const pdStr=p=>p?`${SZ.lbl} · Copies: ${p.copies||1} · ${PAPER[p.paper]||PAPER.glossy} · ${QUAL[p.quality]||QUAL.high} · ${p.borderless?'Borderless':'With margins'}`:'–';
 
 /* ---- IndexedDB: only the frame and the photoshoot in progress (this browser). Saved strips live in MySQL. ---- */
@@ -253,7 +256,7 @@ function drawQR(c,text){const Q=qrMatrix(text),x=c.getContext('2d');
  for(let y=0;y<n;y++)for(let xx=0;xx<n;xx++)if(Q[y][xx])x.fillRect((xx+qz)*sc,(y+qz)*sc,sc,sc)}
 
 /* ---- MIDSnapped: the only place to download, print or share a strip ---- */
-const qsay=t=>$('qs').textContent=t;
+const qsay=toast;
 const fcache=new Map();
 async function frameFor(it){if(it.fr)return it.fr;const k=it.name+'|'+(it.fb&&it.fb.size);if(fcache.has(k))return fcache.get(k);
  const head=await it.fb.slice(0,4000).text(),tag=(head.match(/<svg[^>]*>/i)||[''])[0],vb=tag.match(/viewBox="([^"]+)"/);
@@ -263,32 +266,43 @@ async function frameFor(it){if(it.fr)return it.fr;const k=it.name+'|'+(it.fb&&it
 async function outItem(it,fmt,wmm,hmm,list){let rw=[];try{await hydrate(it);const fr=await frameFor(it);
  rw=await Promise.all(it.rows.map(async c=>({img:c.b?await createImageBitmap(c.b):null,z:c.z||1,ox:c.ox||0,oy:c.oy||0})));
  return await makePNG(list,wmm,hmm,fmt,fr,rw)}catch{return null}finally{rw.forEach(r=>r.img&&r.img.close&&r.img.close())}}
-async function logUse(it,kind,n){
- const r=await api('POST',`/api/midsnapped/${it.id}/events`,{kind:kind==='dl'?'download':'print',copies:n||1,details:kind==='dl'?null:{...prefs}});
- Object.assign(it,r.midsnapped);
- if(r.log){const i=logCache.findIndex(x=>x.id===r.log.id);if(i<0)logCache.push(r.log);else logCache[i]=r.log}
- showHist();showReady()}
+async function logUse(it,kind,n){applyEvent(it,await api('POST',`/api/midsnapped/${it.id}/events`,{kind:kind==='dl'?'download':'print',copies:n||1}))}
 async function qDownload(it,btn){if(busy)return;setBusy(btn,true);qsay('Rendering your photostrip, please wait…');await tick();
- const fm=prefs.fmt==='jpg'?'jpg':'png',r=await outItem(it,fm,MM_W,MM_H,[600,300]);setBusy(btn,false);
+ const fm='png',r=await outItem(it,fm,MM_W,MM_H,[600,300]);setBusy(btn,false);
  if(!r)return qsay('The image could not be rendered. Try a desktop browser.');
  const ok=await save(r.blob,`midsnap-${new Date(it.ts).toISOString().slice(0,19).replace(/[-:T]/g,'')}-102x152mm.${fm}`);
  if(!ok)return qsay('Download cancelled.');
  try{await logUse(it,'dl')}catch(e){return qsay('Downloaded, but the count could not be saved: '+e.message)}
  qsay(`Downloaded 102 × 152 mm ${fm.toUpperCase()} (${r.w} × ${r.h} px, ${r.dpi} dpi).`)}
-function fillDlg(){const t=$('pdt');t.innerHTML='';[['Paper size',SZ.lbl],['Copies',prefs.copies],['Paper type',PAPER[prefs.paper]],['Quality',QUAL[prefs.quality]],['Borderless margin',prefs.borderless?'On':'Off']].forEach(([a,b])=>{const tr=document.createElement('tr'),x=document.createElement('td'),y=document.createElement('td');x.textContent=a;y.textContent=b;tr.append(x,y);t.append(tr)});$('pdno').checked=false}
-function qPrint(it,btn){if(busy)return;printTarget=it;const d=$('pdlg');if(prefs.ask&&d.showModal){fillDlg();d.showModal()}else doPrint(it,btn)}
-$('pdgo').onclick=()=>{if($('pdno').checked){prefs.ask=false;savePrefs();syncPrefs()}$('pdlg').close();doPrint(printTarget)};
+function fillDlg(){const t=$('pdt');t.innerHTML='';[['Paper size',SZ.lbl],['Paper type',PAPER[prefs.paper]],['Quality',QUAL[prefs.quality]],['Borderless margin',prefs.borderless?'On':'Off']].forEach(([a,b])=>{const tr=document.createElement('tr'),x=document.createElement('td'),y=document.createElement('td');x.textContent=a;y.textContent=b;tr.append(x,y);t.append(tr)})}
+const applyEvent=(it,r)=>{Object.assign(it,r.midsnapped);
+ if(r.log){const i=logCache.findIndex(x=>x.id===r.log.id);if(i<0)logCache.push(r.log);else logCache[i]=r.log}
+ showHist();showReady()};
+function qPrint(it,btn){if(busy)return;printTarget=it;
+ if(SERVER_PRINT)return doPrint(it,btn);
+ const d=$('pdlg');if(d.showModal){fillDlg();d.showModal()}else doPrint(it,btn)}
+$('pdgo').onclick=()=>{$('pdlg').close();doPrint(printTarget)};
 $('pdcancel').onclick=()=>$('pdlg').close();
+/* The print is always 4 x 6 in, glossy photo paper, high quality, borderless. A server with a printer applies
+   all of that itself; a browser can only apply the size and the margins, so it shows a reminder first. */
 async function doPrint(it,btn){if(busy||!it)return;setBusy(btn||null,true);qsay('Preparing print…');await tick();
- const sz=SZ,r=await outItem(it,'png',sz.mmw,sz.mmh,QDPI[prefs.quality]||[300]);setBusy(btn||null,false);
- if(!r)return qsay('The print image could not be prepared.');
- const n=clamp(Math.round(+prefs.copies)||1,1,99),u=URL.createObjectURL(r.blob);
- $('pstyle').textContent=`@page{size:${sz.w} ${sz.h};margin:0}@media print{#pr .pg{width:${sz.w};height:${sz.h};padding:${prefs.borderless?'0':'3mm'};box-sizing:border-box;overflow:hidden;break-after:page}#pr .pg:last-child{break-after:auto}#pr .pg img{width:100%;height:100%;object-fit:fill;display:block}}`;
- const pr=$('pr');pr.innerHTML='';
- for(let k=0;k<n;k++){const g=document.createElement('div');g.className='pg';const im=new Image();im.alt='Photostrip';
-  if(!k)im.onload=()=>{qsay('');window.print()};
-  im.src=u;g.append(im);pr.append(g)}
- logUse(it,'pr',n).catch(e=>qsay('Printed, but the count could not be saved: '+e.message))}
+ const sz=SZ,r=await outItem(it,'png',sz.mmw,sz.mmh,[600,300]);
+ if(!r){setBusy(btn||null,false);return qsay('The print image could not be prepared.')}
+ const n=prefs.copies;
+ if(SERVER_PRINT){
+  try{qsay('Sending to the printer…');
+   const fd=new FormData();fd.append('image',r.blob,'strip.png');fd.append('copies',String(n));
+   applyEvent(it,await api('POST',`/api/midsnapped/${it.id}/print`,fd));
+   qsay(`Sent to the printer: ${SZ.lbl}, ${PAPER[prefs.paper]}, ${QUAL[prefs.quality]}, borderless.`)}
+  catch(e){qsay('Could not print: '+e.message)}
+  return setBusy(btn||null,false)}
+ setBusy(btn||null,false);
+ const u=URL.createObjectURL(r.blob);
+ $('pstyle').textContent=`@page{size:${sz.w} ${sz.h};margin:0}@media print{#pr .pg{width:${sz.w};height:${sz.h};padding:0;box-sizing:border-box;overflow:hidden;break-after:page}#pr .pg:last-child{break-after:auto}#pr .pg img{width:100%;height:100%;object-fit:fill;display:block}}`;
+ const pr=$('pr');pr.innerHTML='';const g=document.createElement('div');g.className='pg';const im=new Image();im.alt='Photostrip';
+ const ld=new Promise(ok=>{im.onload=im.onerror=ok});im.src=u;g.append(im);pr.append(g);await ld;
+ await new Promise(ok=>requestAnimationFrame(()=>requestAnimationFrame(ok)));qsay('');window.print();
+ try{applyEvent(it,await api('POST',`/api/midsnapped/${it.id}/events`,{kind:'print',copies:n}))}catch(e){qsay('Printed, but the count could not be saved: '+e.message)}}
 const fdt=t=>t?`${dstr(t)} ${tstr(t).slice(0,5)}`:'–';
 function liveLink(it){if(it.link&&!(it.linkExp>Date.now())){it.link=null;it.linkExp=null}return it.link||null}
 /* a saved strip's frame and photos are fetched from the server the first time it is rendered */
@@ -298,20 +312,20 @@ async function hydrate(it){if(it._hy)return;
  it.rows=await Promise.all(it.layout.map(async(c,i)=>({b:c.has?await g(`/api/snaps/${it.id}/photos/${i}`):null,z:c.z||1,ox:c.ox||0,oy:c.oy||0})));
  it._hy=true}
 async function qQr(it,btn){it._open=!it._open;if(!it._open||liveLink(it)||it._busy){showReady();return}
- it._busy=true;it._msg='';showReady();
- try{const r=await outItem(it,'jpg',MM_W,MM_H,[300,150]);if(!r)throw new Error('could not render the strip');
-  const fd=new FormData();fd.append('image',r.blob,'strip.jpg');
-  const s=await api('POST',`/api/midsnapped/${it.id}/share`,fd);it.link=s.url;it.linkExp=s.expires;it.linkWarn=s.warn||''}
+ it._busy=true;it._msg='';showReady();qsay('Uploading your photostrip…');
+ try{const cap=(BOOT.share&&BOOT.share.max)||1e7;let r=await outItem(it,'png',MM_W,MM_H,[600,300]);   /* high-quality PNG; 300 dpi only if Cloudinary's size limit needs it */
+  if(r&&r.blob.size>cap)r=await outItem(it,'png',MM_W,MM_H,[300,200])||r;if(!r)throw new Error('could not render the strip');
+  const fd=new FormData();fd.append('image',r.blob,'strip.png');
+  const s=await api('POST',`/api/midsnapped/${it.id}/share`,fd);it.link=s.url;it.linkExp=s.expires}
  catch(e){it._msg='Could not create the download link: '+(e.message||'unknown error')}
- it._busy=false;showReady()}
+ it._busy=false;showReady();qsay(it.link?'Download link ready. It works for '+((BOOT.share&&BOOT.share.hours)||24)+' hours.':it._msg)}
 async function qUnlink(it){try{await api('DELETE',`/api/midsnapped/${it.id}/share`)}catch(e){return qsay('Could not delete the online copy: '+e.message)}
  it.link=null;it.linkExp=null;it._open=false;showReady();qsay('Online copy deleted. Its QR code no longer works.')}
 async function qRemove(it){if(busy)return;if(!await askConfirm('Remove from MIDSnapped','Remove this strip from MIDSnapped? Its record, counts and online copy are deleted, so its QR code stops working.'))return;
  try{await api('DELETE',`/api/midsnapped/${it.id}`)}catch(e){return qsay('Could not remove the strip: '+e.message)}
  readyQ=readyQ.filter(o=>o!==it);showReady();qsay('Removed from MIDSnapped.')}
-function showReady(){const el=$('qlist');el.innerHTML='';const has=readyQ.length>0,fmU=prefs.fmt==='jpg'?'JPG':'PNG';
- $('qempty').style.display=has?'none':'';const pd=$('qpd');pd.style.display=has?'':'none';pd.innerHTML='';
- [SZ.lbl,PAPER[prefs.paper],QUAL[prefs.quality],prefs.borderless?'Borderless':'With margins'].forEach(t=>{const c=document.createElement('span');c.className='chip';c.textContent=t;pd.append(c)});
+function showReady(){const el=$('qlist');el.innerHTML='';const has=readyQ.length>0,fmU='PNG';
+ $('qempty').style.display=has?'none':'';
  const mk=(t,fn,cls)=>{const x=document.createElement('button');x.className=cls||'sm';x.textContent=t;x.onclick=e=>fn(e.currentTarget);return x};
  readyQ.forEach(it=>{
   const lk=liveLink(it);
@@ -322,14 +336,14 @@ function showReady(){const el=$('qlist');el.innerHTML='';const has=readyQ.length
   tp.append(b,ch);
   const st=document.createElement('div');st.className='hint';st.style.margin='0';st.textContent=`Last downloaded: ${fdt(it.lastDl)} · Last printed: ${fdt(it.lastPr)}`;
   const a=document.createElement('div');a.className='qa';
-  a.append(mk('Download '+fmU,x=>qDownload(it,x),'main sm'),mk('Print',x=>qPrint(it,x)),mk(it._open?'Hide QR code':'QR code',x=>qQr(it,x)),mk('Remove',()=>qRemove(it)));
+  a.append(mk('Download '+fmU,x=>qDownload(it,x),'main sm'),mk('Print',x=>qPrint(it,x)),mk('Edit',()=>editStrip(it)),mk(it._open?'Hide QR code':'QR code',x=>qQr(it,x)),mk('Remove',()=>qRemove(it)));
   m.append(tp,st,a);w.append(im,m);
   if(it._open){const q=document.createElement('div');q.className='qr';
    if(it._busy)q.textContent='Creating your download link…';
    else if(lk){const c=document.createElement('canvas');drawQR(c,lk);const t=document.createElement('div');t.className='hint';t.textContent='Scan with a phone camera to download the photostrip';
     const l=document.createElement('div');l.className='lnk';l.textContent=lk;const r=document.createElement('div');r.className='qa';r.style.justifyContent='center';
     r.append(mk('Copy link',()=>{navigator.clipboard&&navigator.clipboard.writeText(lk).then(()=>qsay('Link copied.'),()=>qsay('Could not copy the link.'))}),mk('Delete online copy',()=>qUnlink(it)));
-    const n=document.createElement('div');n.className='hint';n.textContent=`Customers can download the strip from this link until ${fdt(it.linkExp)}. It expires automatically after 1 day. Delete the online copy sooner if you no longer need it.`+(it.linkWarn?' '+it.linkWarn:'');q.append(c,t,l,r,n)}
+    const n=document.createElement('div');n.className='hint';n.textContent=`Customers can download the strip from this link until ${fdt(it.linkExp)}. It is deleted automatically after ${BOOT.share&&BOOT.share.hours||24} hours. Delete the online copy sooner if you no longer need it.`;q.append(c,t,l,r,n)}
    else q.textContent=it._msg||'Preparing…';
    w.append(q)}
   el.append(w)})}
@@ -358,14 +372,14 @@ $('end').onclick=async()=>{if(busy)return;const n=rows.filter(r=>r.img).length;i
  try{res=await api('POST','/api/snaps',fd)}catch(e){setBusy($('end'),false);return osay('Could not save this strip: '+e.message)}
  setBusy($('end'),false);osay('');
  const it={...res.midsnapped,fb:frame.file,rows:rowsData,fr:frame,_hy:true};
- readyQ=[it,...readyQ.filter(o=>o.id!==it.id)];recent=res.recent;logCache=[...logCache,res.log];
- rows.forEach(wipe);sess={dt:[],pt:[],pd:null};buildSlots();redraw();persist();showHist();showRecent();showReady();
+ readyQ=[it,...readyQ.filter(o=>o.id!==it.id)];logCache=[...logCache,res.log];
+ rows.forEach(wipe);sess={dt:[],pt:[],pd:null};buildSlots();redraw();persist();showHist();showReady();
  qsay('Added to MIDSnapped. Download, print or share it from here.');$('cReady').scrollIntoView({behavior:'smooth',block:'nearest'})};
 $('ch').onclick=async()=>{if(await askConfirm('Clear photo log','Delete the whole photo log? Download the CSV first if you need it.')){try{await api('DELETE','/api/log')}catch(err){return osay(err.message)}logCache=[];showHist()}};
 function stats(h){const hr={};h.forEach(e=>{const k=new Date(e.ts).getHours();hr[k]=(hr[k]||0)+1});const pk=Object.entries(hr).sort((a,b)=>b[1]-a[1])[0];
  return{shoots:h.length,photos:h.reduce((s,e)=>s+e.n,0),dl:h.reduce((s,e)=>s+e.d,0),pr:h.reduce((s,e)=>s+e.p,0),peak:pk?new Date(2000,0,1,+pk[0]).toLocaleTimeString([],{hour:'numeric'}):'–'}}
 function syncBtns(){const has=rows.some(r=>r.img),ok=!!frame&&has,n=hist().length;
- $('clr').disabled=!has;$('fclr').disabled=!frame;$('end').disabled=!ok||busy;$('rclr').disabled=!recent.length;['csv','txt','ch'].forEach(k=>$(k).disabled=!n)}
+ $('clr').disabled=!has;$('fclr').disabled=!frame;$('end').disabled=!ok||busy;['csv','txt','ch'].forEach(k=>$(k).disabled=!n)}
 function updateLive(){syncBtns();const n=rows.filter(r=>r.img).length,d=sess.dt.length,p=sess.pt.length,el=$('live');el.innerHTML='';
  [['In-progress photos',n]].forEach(([l,v])=>{const c=document.createElement('div');c.className='stat';const b=document.createElement('b');b.textContent=v;c.append(b,l);el.append(c)})}
 function showHist(){
@@ -385,25 +399,16 @@ function showHist(){
   cell(tr,(e.pt&&e.pt.length)?e.pt.map(tstr).join(', '):'–');cell(tr,pdStr(e.pd));
   const ta=document.createElement('td'),x=document.createElement('button');x.className='sm';x.textContent='Delete';x.onclick=async()=>{try{await api('DELETE','/api/log/'+e.id)}catch(err){return osay(err.message)}logCache=logCache.filter(o=>o.id!==e.id);showHist()};ta.append(x);tr.append(ta);body.append(tr)})}
 
-/* ---- recent strips: reopen an old photoshoot, frame and photos, fully editable ---- */
-function showRecent(){const el=$('rlist');el.innerHTML='';const has=recent.length>0;$('rempty').style.display=has?'none':'';$('rhead').style.display=has?'':'none';$('rcb').style.display=has?'':'none';syncBtns();
- if(!has)return
- recent.forEach((e,i)=>{const w=document.createElement('div');w.className='rcw';
-  const b=document.createElement('button');b.className='rc';b.style.setProperty('--i',i);b.title='Reopen this strip';
-  const im=new Image();im.src=e.t;im.alt='Recent strip';im.draggable=false;const a=document.createElement('b');a.textContent=`${dstr(e.ts)} ${tstr(e.ts).slice(0,5)}`;const c=document.createElement('span');c.textContent=pl(e.n,'photo');
-  b.append(im,a,c);b.onclick=()=>reopen(e);
-  const x=document.createElement('button');x.className='rx';x.textContent='✕';x.title='Remove from recent';x.setAttribute('aria-label','Remove from recent');
-  x.onclick=async()=>{try{await api('DELETE','/api/recent/'+e.id)}catch(err){return osay(err.message)}recent=recent.filter(o=>o!==e);showRecent()};
-  w.append(b,x);el.append(w)})}
-$('rclr').onclick=async()=>{if(!recent.length||!await askConfirm('Clear recent strips','Clear all recent strips?'))return;try{await api('DELETE','/api/recent')}catch(err){return osay(err.message)}recent=[];showRecent()};
+/* ---- MIDSnapped strips can be reopened: the frame and photos come back on the strip, fully editable ---- */
 async function applyRows(list){for(let i=0;i<rows.length&&i<list.length;i++){const c=list[i],st=rows[i];st.z=c.z||1;st.ox=c.ox||0;st.oy=c.oy||0;
  if(c.b){try{st.img=await createImageBitmap(c.b);st.blob=c.b;st.url=URL.createObjectURL(c.b);st.fresh=true}catch{}}}buildSlots()}
-async function reopen(e){
- if(rows.some(r=>r.img)&&!await askConfirm('Reopen strip','Replace the photos currently on the strip with this recent strip?'))return;
+async function editStrip(e){if(busy)return;
+ if(rows.some(r=>r.img)&&!await askConfirm('Edit strip','Replace the photos currently on the strip with this MIDSnapped strip?'))return;
  try{await hydrate(e)}catch(x){return osay(x.message)}
  await loadFrame(e.fb,e.name,false,true);
  if(!frame||frame.name!==e.name)return;
- await applyRows(e.rows);redraw();updateLive();osay('Reopened the recent strip with its photos. You can edit everything.')}
+ await applyRows(e.rows);redraw();updateLive();$('cFrame').scrollIntoView({behavior:'smooth',block:'start'});
+ osay('Strip opened for editing. Press MIDSnap-it to save the changes as a new strip.')}
 
 /* ---- startup: restore the frame and the photoshoot in progress ---- */
 async function restore(){
@@ -426,6 +431,6 @@ const BGD=[['star',2,16,46,-12,7,0,.85],['flower',4,46,54,10,8,1,.8],['sparkle',
 const VB={star:'0 0 100 100',sparkle:'-50 -50 100 100',flower:'-60 -60 120 120',clover:'-62 -62 124 124'};
 BGD.forEach(([sy,l,t,w,r,d,dl,o])=>{const NS='http://www.w3.org/2000/svg',v=document.createElementNS(NS,'svg'),u=document.createElementNS(NS,'use');v.setAttribute('class','deco fl');v.setAttribute('viewBox',VB[sy]);
  v.style.cssText=`left:${l}%;top:${t}%;width:${w}px;--r:${r}deg;--d:${d}s;animation-delay:${dl}s;--o:${o}`;u.setAttribute('href','#'+sy);v.append(u);$('bgd').append(v)});
-recent=BOOT.recent;readyQ=BOOT.midsnapped;logCache=BOOT.log;
-buildSlots();showFrameThumb();showHist();showRecent();showReady();redraw();
+readyQ=BOOT.midsnapped;logCache=BOOT.log;
+buildSlots();showFrameThumb();showHist();showReady();redraw();
 (async()=>{const r=await idbGet('frame');if(r&&r.blob)await loadFrame(r.blob,r.name,true);await restore();})();

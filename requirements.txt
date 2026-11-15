@@ -1,4 +1,9 @@
 Flask>=3.0
 PyMySQL[rsa]>=1.1
 python-dotenv>=1.0
-gunicorn>=21.2
+gunicorn>=21.2; sys_platform != "win32"
+waitress>=3.0; sys_platform == "win32"
+cloudinary>=1.40
+# Windows server printing
+pywin32>=306; sys_platform == "win32"
+pillow>=10; sys_platform == "win32"

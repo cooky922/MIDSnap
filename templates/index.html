@@ -42,15 +42,15 @@
   <div class="btns" id="pbtns" style="margin-top:10px"><button class="sm" id="clr">Clear all photos</button></div>
  </div><svg class="deco fl d-b" style="--d:7s" viewBox="-60 -60 120 120"><use href="#flower"/></svg></div>
  <div class="card" id="cOut"><div class="ch">Output</div><div class="cb">
-  <div class="sub">Print details <button class="sm" id="pdreset">Reset to defaults</button></div>
+  <div class="sub">Suggested print details</div>
   <div class="orow"><span>Paper size</span><b>4 in × 6 in (North American)</b></div>
-  <div class="orow"><label for="pfmt">Image form</label><select id="pfmt"></select></div>
-  <div class="orow"><label for="pcopies">Number of copies</label><div class="nn"><button type="button" class="nb" id="pcm" aria-label="Fewer copies">&minus;</button><input type="number" id="pcopies" min="1" max="99" step="1" value="1"><button type="button" class="nb" id="pcp" aria-label="More copies">+</button></div></div>
-  <div class="orow"><label for="ppaper">Paper type</label><select id="ppaper"></select></div>
-  <div class="orow"><label for="pq">Quality</label><select id="pq"></select></div>
-  <div class="orow"><label for="pbl">Borderless Margin</label><input type="checkbox" id="pbl"></div>
-  <div class="orow"><label for="pask">Remind me before printing</label><input type="checkbox" id="pask"></div>
-    <p id="os" class="hint os" aria-live="polite"></p>
+  <div class="orow"><label for="pfmt">Image form</label><select id="pfmt" disabled></select></div>
+  <div class="orow"><label for="pcopies">Number of copies</label><div class="nn"><button type="button" class="nb" id="pcm" aria-label="Fewer copies" disabled>&minus;</button><input type="number" id="pcopies" min="1" max="99" step="1" value="1" disabled><button type="button" class="nb" id="pcp" aria-label="More copies" disabled>+</button></div></div>
+  <div class="orow"><label for="ppaper">Paper type</label><select id="ppaper" disabled></select></div>
+  <div class="orow"><label for="pq">Quality</label><select id="pq" disabled></select></div>
+  <div class="orow"><label for="pbl">Borderless Margin</label><input type="checkbox" id="pbl" disabled></div>
+  <div class="orow"><label for="pask">Remind me before printing</label><input type="checkbox" id="pask" disabled></div>
+  <p class="hint" id="pnote" style="margin:10px 0 0"></p>
  </div><svg class="deco fl clv" style="--d:7s" viewBox="-62 -62 124 124"><use href="#clover"/></svg><svg class="deco fl d-f" style="--d:6s" viewBox="-50 -50 100 100"><use href="#sparkle"/></svg></div>
  
 </div>
@@ -66,17 +66,8 @@
 
 <section class="sect"><div class="card" id="cReady"><div class="ch">MIDSnapped</div><div class="cb">
  <div class="rempty" id="qempty"><span>🎞️</span>Nothing MIDSnapped yet<small>Press MIDSnap-it to send a strip here</small></div>
- <div class="qpd" id="qpd"></div>
  <div id="qlist"></div>
- <p id="qs" class="hint os" aria-live="polite"></p>
 </div><svg class="deco fl d-g" style="--d:6s" viewBox="0 0 100 100"><use href="#star"/></svg></div></section>
-
-<section class="sect"><div class="card" id="cRecent"><div class="ch">Recent strips</div><div class="cb">
- <div class="rempty" id="rempty"><span>😢</span>No recent strips yet</div>
- <div class="rhead" id="rhead"><span class="lbl">Last 5</span><span class="hint" style="margin:0">Click a strip to reopen</span></div>
- <div class="rlist" id="rlist"></div>
- <div class="btns" id="rcb" style="margin-top:12px"><button class="sm" id="rclr">Clear recent strips</button></div>
-</div><svg class="deco fl d-c" style="--d:5.5s" viewBox="0 0 100 100"><use href="#star"/></svg></div><svg class="deco fl d-i" style="--d:7s" viewBox="-50 -50 100 100"><use href="#sparkle"/></svg></section>
 
 <section class="sect"><details class="card hist" id="hist"><summary id="hsum"><span>Photo log</span><span class="wbs"><button class="wb" id="hbtn" type="button"></button></span></summary>
  <div class="hbw"><div class="hb">
@@ -88,9 +79,8 @@
 </details><svg class="deco fl d-h" style="--d:6s" viewBox="-60 -60 120 120"><use href="#flower"/></svg></section>
 
 <dialog id="pdlg"><div class="ch">Before you print</div><div class="cb">
- <p class="hint" style="margin:0">The 4 × 6 in paper size is set by this page. Browsers can't change the paper type or quality, so make sure these are chosen in the print window that opens next:</p>
+ <p class="hint" style="margin:0">This computer isn't set up for direct printing, so the browser's print window opens next. The 4 × 6 in size and borderless margins are set by this page, but a browser can't choose the paper type or quality. Please pick these in the print window:</p>
  <table class="pdt" id="pdt"></table>
- <label class="chk2" style="margin-top:12px"><input type="checkbox" id="pdno"> Don't show this again</label>
  <div class="btns" style="margin-top:6px"><button class="main sm" id="pdgo">Print</button><button class="sm" id="pdcancel">Cancel</button></div>
 </div></dialog>
 <dialog id="cdlg"><div class="ch" id="cdt">Confirm</div><div class="cb">
@@ -98,6 +88,7 @@
  <div class="btns" style="margin-top:14px"><button class="main sm" id="cdok">OK</button><button class="sm" id="cdno">Cancel</button></div>
 </div></dialog>
 <div id="pr"></div>
+<div id="toasts" aria-live="polite" aria-atomic="false"></div>
 
 <script id="boot" type="application/json">{{ boot|tojson }}</script>
 <script src="{{ url_for('static', filename='js/app.js', v=asset_v) }}"></script>
