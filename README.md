@@ -18,24 +18,25 @@ flask --app app run --host 0.0.0.0        # or: gunicorn -w 2 -b 0.0.0.0:5000 ap
 
 ## Customer download links (Cloudinary)
 
-Press **QR code** on a MIDSnapped strip: the high-quality PNG (600 dpi) is uploaded to Cloudinary and the QR code
+Press **Generate QR code** in a strip's popup: the high-quality PNG (600 dpi) is uploaded to Cloudinary and the QR code
 points straight to the Cloudinary URL, so phones can open it from anywhere (no public server address needed).
 The link works for 24 hours (`SHARE_TTL_HOURS`), then the file is deleted from Cloudinary. Expired files are removed
 when the app runs, and you can also run `flask --app app purge-expired` from cron (for example every 15 minutes).
 Cloudinary's free plan accepts images up to 10 MB: if a 600 dpi PNG is larger than `SHARE_MAX_MB`, that strip is
 uploaded as a 300 dpi PNG instead.
 
-## Printing (4 x 6 in, glossy photo paper, high quality, borderless)
+## Printing (4 x 6 in, borderless)
 
-These settings are fixed (the Output section shows them but they cannot be changed). A browser cannot choose the
-paper type or the quality, so MIDSnap prints from the server when it can, with `PRINT_BACKEND=auto` (default):
+**Print** opens the browser's own print window with the strip at 4 x 6 in and no margins (nothing is sent from the server).
+A browser cannot choose the paper type or the quality, so a reminder asks you to pick glossy photo paper and high
+quality in that window.
 
-* **Windows**: through `pywin32` (paper size, glossy media type and high quality are sent to the driver).
-* **Linux / macOS**: through CUPS `lp` (`media`, `media-type=photographic-glossy`, `print-quality=5`, borderless).
+## Using it
 
-The server must run on the computer the printer is connected to. Driver option names differ, so you can override
-them in `.env` (see `CUPS_*`); borderless in particular depends on the driver being set up for borderless 4x6.
-If no server printer is available, Print falls back to the browser's print window (4 x 6 in, no margins) and
-reminds you to choose glossy photo paper and high quality there.
+* After **MIDSnap-it**, a popup opens for the new strip with **Download PNG / JPG**, **Generate QR code** and **Print**.
+  Clicking any row in the MIDSnapped section opens the same popup. Rows only have **Edit** and **Remove**.
+* Every strip has an ID (`XXXX-XXXX`) shown in the Preview heading before it is MIDSnapped, and on its MIDSnapped row.
+* The MIDSnapped list scrolls once it has 5 or more rows.
+* The **Print details** section is collapsed by default.
 
 Saved strips can be reopened with **Edit** in the MIDSnapped section.

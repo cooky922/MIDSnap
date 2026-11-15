@@ -23,7 +23,6 @@ from dotenv import load_dotenv
 from flask import Flask, Response, abort, g, jsonify, render_template, request
 from werkzeug.exceptions import HTTPException
 
-import printing
 
 load_dotenv()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -47,6 +46,10 @@ else:
     cloudinary.config(secure=True)          # reads CLOUDINARY_URL
 CLOUDINARY_FOLDER = os.getenv('CLOUDINARY_FOLDER', 'midsnap')
 SHARE_MAX_BYTES = int(float(os.getenv('SHARE_MAX_MB', '9.5')) * 1024 * 1024)   # Cloudinary free plan: 10 MB / image
+
+FORCED = {'paper': 'glossy', 'quality': 'high', 'borderless': True}   # the print settings shown in the app
+CODE_ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'                          # no 0/O/1/I
+CODE_RE = re.compile(r'^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$')
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024
@@ -176,7 +179,7 @@ def on_error(e):
 def midsnapped_items(where='', args=()):
     rows = qall(
         'SELECT m.id AS mid, m.download_count, m.print_count, m.last_downloaded_at, m.last_printed_at, '
-        's.uid, s.frame_name, s.photo_count, s.layout, s.created_at '
+        's.uid, s.code, s.frame_name, s.photo_count, s.layout, s.created_at '
         'FROM midsnapped m JOIN snapshots s ON s.id = m.snapshot_id ' + where +
         ' ORDER BY m.created_at DESC, m.id DESC', args)
     if not rows:
@@ -195,7 +198,7 @@ def midsnapped_items(where='', args=()):
     for r in rows:
         lk = links.get(r['mid'])
         out.append({
-            'id': r['uid'], 'ts': ms(r['created_at']), 'name': r['frame_name'], 'n': r['photo_count'],
+            'id': r['uid'], 'code': r['code'], 'ts': ms(r['created_at']), 'name': r['frame_name'], 'n': r['photo_count'],
             't': f"/api/snaps/{r['uid']}/thumb", 'layout': jl(r['layout']),
             'dl': r['download_count'], 'pr': r['print_count'],
             'lastDl': ms(r['last_downloaded_at']), 'lastPr': ms(r['last_printed_at']),
@@ -277,7 +280,7 @@ def asset_version():
 @app.get('/')
 def index():
     maybe_purge()
-    boot = {'midsnapped': midsnapped_items(), 'log': log_items(), 'print': printing.info(),
+    boot = {'midsnapped': midsnapped_items(), 'log': log_items(),
             'share': {'ready': cloud_ready(), 'hours': SHARE_TTL.total_seconds() / 3600, 'max': SHARE_MAX_BYTES}}
     resp = Response(render_template('index.html', boot=boot, asset_v=asset_version()), mimetype='text/html')
     resp.headers['Cache-Control'] = 'no-store'
@@ -304,6 +307,19 @@ def clean_layout(raw):
              'z': clampf((r or {}).get('z') if isinstance(r, dict) else None, 1, 5, 1),
              'ox': clampf((r or {}).get('ox') if isinstance(r, dict) else None, -5, 5, 0),
              'oy': clampf((r or {}).get('oy') if isinstance(r, dict) else None, -5, 5, 0)} for r in raw]
+
+
+def new_code():
+    s = ''.join(secrets.choice(CODE_ALPHA) for _ in range(8))
+    return s[:4] + '-' + s[4:]
+
+
+def unique_code(wanted):
+    """The strip ID shown in the preview (XXXX-XXXX); a new one is made if it is malformed or already used."""
+    code = wanted if isinstance(wanted, str) and CODE_RE.match(wanted) else new_code()
+    while qone('SELECT 1 AS x FROM snapshots WHERE code=%s', (code,)):
+        code = new_code()
+    return code
 
 
 @app.post('/api/snaps')
@@ -341,13 +357,14 @@ def create_snap():
         abort(400, 'Add at least one photo first.')
 
     now, uid = utcnow(), secrets.token_hex(8)
+    code = unique_code(meta.get('code'))
     sha = hashlib.sha256(frame).hexdigest()
     fr = qone('SELECT id FROM frames WHERE sha256=%s', (sha,))
     frame_id = fr['id'] if fr else insert(
         'INSERT INTO frames (sha256, name, svg, created_at) VALUES (%s,%s,%s,%s)', (sha, name, frame, now))
     snap_id = insert(
-        'INSERT INTO snapshots (uid, frame_id, frame_name, photo_count, layout, thumb, created_at) '
-        'VALUES (%s,%s,%s,%s,%s,%s,%s)', (uid, frame_id, name, len(photos), json.dumps(layout), thumb, now))
+        'INSERT INTO snapshots (uid, code, frame_id, frame_name, photo_count, layout, thumb, created_at) '
+        'VALUES (%s,%s,%s,%s,%s,%s,%s,%s)', (uid, code, frame_id, name, len(photos), json.dumps(layout), thumb, now))
     for i, mime, data in photos:
         insert('INSERT INTO snapshot_photos (snapshot_id, row_idx, mime, data) VALUES (%s,%s,%s,%s)',
                (snap_id, i, mime, data))
@@ -430,7 +447,7 @@ def add_event(uid):
 def add_event_for(uid, mid, kind, copies):
     """Record a download / print: counters, the event row and the photo log. Prints always use the forced settings."""
     now = utcnow()
-    details = dict(printing.FORCED, fmt='png', copies=copies) if kind == 'print' else None
+    details = dict(FORCED, fmt='png', copies=copies) if kind == 'print' else None
     insert('INSERT INTO usage_events (midsnapped_id, kind, copies, details, created_at) VALUES (%s,%s,%s,%s,%s)',
            (mid, kind, copies, json.dumps(details) if details else None, now))
     if kind == 'download':
@@ -500,26 +517,7 @@ def delete_share(uid):
     return '', 204
 
 
-@app.post('/api/midsnapped/<uid>/print')
-def print_strip(uid):
-    """Print from the server with the forced settings (4 x 6 in, glossy photo paper, high quality, borderless)."""
-    m = qone('SELECT m.id FROM midsnapped m JOIN snapshots s ON s.id = m.snapshot_id WHERE s.uid=%s', (uid,))
-    if not m:
-        abort(404, 'That strip is no longer in MIDSnapped.')
-    if printing.backend() is None:
-        abort(501, 'Server printing is not set up. Set PRINT_BACKEND in the .env file.')
-    data = read_upload('image', 40 * 1024 * 1024)
-    if sniff(data) != 'image/png':
-        abort(400, 'The strip image is missing or is not a PNG.')
-    try:
-        copies = max(1, min(99, int(request.form.get('copies') or 1)))
-    except ValueError:
-        copies = 1
-    try:
-        printing.print_png(data, copies)
-    except printing.PrintError as e:
-        abort(502, str(e))
-    return add_event_for(uid, m['id'], 'print', copies)
+
 
 
 # ---- photo log
@@ -549,6 +547,9 @@ def migrate(conn):
                         'AND table_name=%s AND column_name=%s', (t, c))
             return cur.fetchone()[0] > 0
     with conn.cursor() as cur:
+        if not has_col('snapshots', 'code'):                     # strip IDs
+            cur.execute("ALTER TABLE snapshots ADD COLUMN code VARCHAR(12) NOT NULL DEFAULT '' AFTER uid, ADD KEY ix_snapshots_code (code)")
+            cur.execute("UPDATE snapshots SET code = UPPER(CONCAT(SUBSTRING(uid,1,4),'-',SUBSTRING(uid,5,4))) WHERE code = ''")
         if not has_col('share_links', 'public_id'):
             cur.execute('ALTER TABLE share_links ADD COLUMN public_id VARCHAR(255) NULL AFTER token')
         if not has_col('share_links', 'url'):

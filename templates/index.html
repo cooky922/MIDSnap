@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>MIDSnap: Photostrip Maker</title>
+<link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='img/favicon.ico') }}">
 <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@500;600;700&family=Lilita+One&family=Montserrat:ital,wght@0,600;0,700;0,800;1,500;1,700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css', v=asset_v) }}">
 <style id="pstyle"></style>
@@ -41,8 +42,13 @@
   <input type="file" id="multi" accept="image/png,image/jpeg" multiple hidden>
   <div class="btns" id="pbtns" style="margin-top:10px"><button class="sm" id="clr">Clear all photos</button></div>
  </div><svg class="deco fl d-b" style="--d:7s" viewBox="-60 -60 120 120"><use href="#flower"/></svg></div>
- <div class="card" id="cOut"><div class="ch">Output</div><div class="cb">
-  <div class="sub">Suggested print details</div>
+ <div class="card" id="cReady"><div class="ch">MIDSnapped</div><div class="cb">
+ <div class="stats" id="qstats"></div>
+ <div class="rempty" id="qempty"><span>🎞️</span>Nothing MIDSnapped yet<small>Press MIDSnap-it to send a strip here</small></div>
+ <div id="qlist"></div>
+</div><svg class="deco fl d-g" style="--d:6s" viewBox="0 0 100 100"><use href="#star"/></svg></div>
+ <div class="card" id="cOut"><div class="ch">Print details</div><div class="cb">
+  <div class="sub">Suggested settings</div>
   <div class="orow"><span>Paper size</span><b>4 in × 6 in (North American)</b></div>
   <div class="orow"><label for="pfmt">Image form</label><select id="pfmt" disabled></select></div>
   <div class="orow"><label for="pcopies">Number of copies</label><div class="nn"><button type="button" class="nb" id="pcm" aria-label="Fewer copies" disabled>&minus;</button><input type="number" id="pcopies" min="1" max="99" step="1" value="1" disabled><button type="button" class="nb" id="pcp" aria-label="More copies" disabled>+</button></div></div>
@@ -56,18 +62,13 @@
 </div>
 
 <div class="col2"><div class="snapwrap"><div class="stage" id="stage">
- <div class="sh" id="sh"><span class="ttl">Preview</span>
+ <div class="sh" id="sh"><span class="ttl">Preview<small class="sid" id="sid" title="Strip ID"></small></span>
   <span class="wbs"><button class="wb" id="bmin" aria-label="Minimize" title="Minimize"></button></span></div>
  <div id="sbw"><div id="sb"><canvas id="cv" width="714" height="1064" aria-label="Photostrip preview"></canvas></div></div>
 </div>
 <button class="main snap" id="end" data-tip="Send this strip to MIDSnapped" aria-label="MIDSnap-it: send this strip to MIDSnapped"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.6-2.4h6.8L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.6"/></svg><span>MIDSnap-it</span></button></div></div>
 <svg class="deco fl d-e" style="--d:6.5s" viewBox="0 0 100 100"><use href="#star"/></svg></div>
 </div>
-
-<section class="sect"><div class="card" id="cReady"><div class="ch">MIDSnapped</div><div class="cb">
- <div class="rempty" id="qempty"><span>🎞️</span>Nothing MIDSnapped yet<small>Press MIDSnap-it to send a strip here</small></div>
- <div id="qlist"></div>
-</div><svg class="deco fl d-g" style="--d:6s" viewBox="0 0 100 100"><use href="#star"/></svg></div></section>
 
 <section class="sect"><details class="card hist" id="hist"><summary id="hsum"><span>Photo log</span><span class="wbs"><button class="wb" id="hbtn" type="button"></button></span></summary>
  <div class="hbw"><div class="hb">
@@ -78,8 +79,9 @@
  </div></div>
 </details><svg class="deco fl d-h" style="--d:6s" viewBox="-60 -60 120 120"><use href="#flower"/></svg></section>
 
+<dialog id="sdlg" class="sdlg"><div class="ch"><span class="ttl2"><span id="sdt">Strip</span><small id="sdid"></small></span><span class="wbs"><button class="wb" id="sdx" type="button"></button></span></div><div class="cb" id="sdb"></div></dialog>
 <dialog id="pdlg"><div class="ch">Before you print</div><div class="cb">
- <p class="hint" style="margin:0">This computer isn't set up for direct printing, so the browser's print window opens next. The 4 × 6 in size and borderless margins are set by this page, but a browser can't choose the paper type or quality. Please pick these in the print window:</p>
+ <p class="hint" style="margin:0">The browser's print window opens next. The 4 × 6 in size and borderless margins are set by this page, but a browser can't choose the paper type or quality. Please pick these in the print window:</p>
  <table class="pdt" id="pdt"></table>
  <div class="btns" style="margin-top:6px"><button class="main sm" id="pdgo">Print</button><button class="sm" id="pdcancel">Cancel</button></div>
 </div></dialog>

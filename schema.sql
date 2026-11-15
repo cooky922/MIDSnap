@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS frames (
 CREATE TABLE IF NOT EXISTS snapshots (
   id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   uid          CHAR(16)        NOT NULL,
+  code         VARCHAR(12)     NOT NULL DEFAULT '',  -- strip ID shown in the preview and in MIDSnapped (XXXX-XXXX)
   frame_id     INT UNSIGNED    NOT NULL,
   frame_name   VARCHAR(255)    NOT NULL,
   photo_count  TINYINT UNSIGNED NOT NULL,
@@ -26,6 +27,7 @@ CREATE TABLE IF NOT EXISTS snapshots (
   created_at   DATETIME(3)     NOT NULL,
   UNIQUE KEY uq_snapshots_uid (uid),
   KEY ix_snapshots_created (created_at),
+  KEY ix_snapshots_code (code),
   CONSTRAINT fk_snapshots_frame FOREIGN KEY (frame_id) REFERENCES frames (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 

@@ -21,6 +21,17 @@ function toast(t){clearTimeout(toastT);
  e.append(ic,m,x);e.setAttribute('role',bad?'alert':'status');
  if(!work)toastT=setTimeout(()=>toast(''),bad?7000:4500)}
 const osay=toast;
+/* toasts live in <body>, but while a modal popup is open they move inside it, so they always show above the popup */
+const dlgStack=[];
+function placeToasts(){const h=dlgStack.length?dlgStack[dlgStack.length-1]:document.body;if(toastBox.parentNode!==h)h.append(toastBox)}
+{const sm=HTMLDialogElement.prototype.showModal;HTMLDialogElement.prototype.showModal=function(){sm.call(this);dlgStack.push(this);placeToasts()}}
+document.addEventListener('close',e=>{const i=dlgStack.indexOf(e.target);if(i>=0)dlgStack.splice(i,1);placeToasts()},true);
+/* strip ID (XXXX-XXXX): shown in the preview, kept for the strip when it is MIDSnapped */
+const IDCH='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const genId=()=>{const a=new Uint8Array(8);crypto.getRandomValues(a);const s=[...a].map(v=>IDCH[v%IDCH.length]).join('');return s.slice(0,4)+'-'+s.slice(4)};
+let curId='';try{curId=localStorage.getItem('ps_curid')||''}catch{}
+function setCurId(v){curId=/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/.test(v||'')?v:genId();try{localStorage.setItem('ps_curid',curId)}catch{}$('sid').textContent='ID '+curId}
+const newCurId=()=>setCurId('');setCurId(curId);
 const redraw=()=>{if(pend)return;pend=true;requestAnimationFrame(()=>{pend=false;render(cv,true);persist()})};
 const kc={key:'',c:null};
 function askConfirm(title,msg){const d=$('cdlg');if(!d.showModal)return Promise.resolve(confirm(msg));
@@ -36,7 +47,6 @@ const PAPER={glossy:'Photo Paper - Glossy',matte:'Photo Paper - Matte'};
 const QUAL={draft:'Draft',standard:'Standard',high:'High Quality'};
 const FMT={png:'PNG',jpg:'JPG'};
 const prefs=Object.freeze({fmt:'png',copies:1,paper:'glossy',quality:'high',borderless:true,ask:true});
-const PRINT=BOOT.print||{mode:'browser'},SERVER_PRINT=PRINT.mode==='server';
 const fillSel=(id,o)=>{$(id).innerHTML='';Object.entries(o).forEach(([k,v])=>{const op=document.createElement('option');op.value=k;op.textContent=v;$(id).append(op)})};
 function enhance(id){const sel=$(id),dd=document.createElement('div'),b=document.createElement('button'),ul=document.createElement('ul');
  dd.className='dd';b.type='button';b.className='ddb';b.disabled=sel.disabled;b.setAttribute('aria-haspopup','listbox');b.setAttribute('aria-expanded','false');ul.className='ddl';ul.setAttribute('role','listbox');b.innerHTML='<span></span><i></i>';
@@ -48,8 +58,7 @@ function enhance(id){const sel=$(id),dd=document.createElement('div'),b=document
 fillSel('pfmt',FMT);fillSel('ppaper',PAPER);fillSel('pq',QUAL);['pfmt','ppaper','pq'].forEach(enhance);
 $('pfmt').value=prefs.fmt;$('ppaper').value=prefs.paper;$('pq').value=prefs.quality;$('pcopies').value=prefs.copies;$('pbl').checked=prefs.borderless;$('pask').checked=prefs.ask;
 ['pfmt','ppaper','pq'].forEach(i=>$(i)._dd());
-$('pnote').textContent=SERVER_PRINT?'These settings are fixed. Printing goes straight to the printer with them'+(PRINT.printer?` (${PRINT.printer})`:'')+'.'
- :'These settings are fixed, but a browser can\'t apply the paper type or quality by itself. You\'ll be reminded to choose them in the print window.';
+$('pnote').textContent='These settings are fixed, but a browser can\'t apply the paper type or quality by itself. You\'ll be reminded to choose them in the print window.';
 const pdStr=p=>p?`${SZ.lbl} · Copies: ${p.copies||1} · ${PAPER[p.paper]||PAPER.glossy} · ${QUAL[p.quality]||QUAL.high} · ${p.borderless?'Borderless':'With margins'}`:'–';
 
 /* ---- IndexedDB: only the frame and the photoshoot in progress (this browser). Saved strips live in MySQL. ---- */
@@ -176,7 +185,7 @@ cv.onwheel=e=>{const r=hit(pt(e));if(!r||!rows[r.row].img)return;e.preventDefaul
 
 /* ---- preview window: minimize / expand ---- */
 const stage=$('stage');
-const I={min:'<svg viewBox="0 0 12 12"><path d="M2 6h8"/></svg>',plus:'<svg viewBox="0 0 12 12"><path d="M6 2v8M2 6h8"/></svg>'};
+const I={min:'<svg viewBox="0 0 12 12"><path d="M2 6h8"/></svg>',plus:'<svg viewBox="0 0 12 12"><path d="M6 2v8M2 6h8"/></svg>',x:'<svg viewBox="0 0 12 12"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg>'};
 const wset=(b,svg,t)=>{b.innerHTML=svg;b.title=t;b.setAttribute('aria-label',t)};
 function syncWin(){const c=stage.classList.contains('col');wset($('bmin'),c?I.plus:I.min,c?'Expand':'Collapse');$('bmin').setAttribute('aria-expanded',String(!c))}
 $('bmin').onclick=()=>{stage.classList.toggle('col');syncWin()};
@@ -267,10 +276,10 @@ async function outItem(it,fmt,wmm,hmm,list){let rw=[];try{await hydrate(it);cons
  rw=await Promise.all(it.rows.map(async c=>({img:c.b?await createImageBitmap(c.b):null,z:c.z||1,ox:c.ox||0,oy:c.oy||0})));
  return await makePNG(list,wmm,hmm,fmt,fr,rw)}catch{return null}finally{rw.forEach(r=>r.img&&r.img.close&&r.img.close())}}
 async function logUse(it,kind,n){applyEvent(it,await api('POST',`/api/midsnapped/${it.id}/events`,{kind:kind==='dl'?'download':'print',copies:n||1}))}
-async function qDownload(it,btn){if(busy)return;setBusy(btn,true);qsay('Rendering your photostrip, please wait…');await tick();
- const fm='png',r=await outItem(it,fm,MM_W,MM_H,[600,300]);setBusy(btn,false);
+async function qDownload(it,btn,fm){fm=fm==='jpg'?'jpg':'png';if(busy)return;setBusy(btn,true);qsay('Rendering your photostrip, please wait…');await tick();
+ const r=await outItem(it,fm,MM_W,MM_H,[600,300]);setBusy(btn,false);
  if(!r)return qsay('The image could not be rendered. Try a desktop browser.');
- const ok=await save(r.blob,`midsnap-${new Date(it.ts).toISOString().slice(0,19).replace(/[-:T]/g,'')}-102x152mm.${fm}`);
+ const ok=await save(r.blob,`midsnap-${it.code||new Date(it.ts).toISOString().slice(0,19).replace(/[-:T]/g,'')}-102x152mm.${fm}`);
  if(!ok)return qsay('Download cancelled.');
  try{await logUse(it,'dl')}catch(e){return qsay('Downloaded, but the count could not be saved: '+e.message)}
  qsay(`Downloaded 102 × 152 mm ${fm.toUpperCase()} (${r.w} × ${r.h} px, ${r.dpi} dpi).`)}
@@ -278,25 +287,17 @@ function fillDlg(){const t=$('pdt');t.innerHTML='';[['Paper size',SZ.lbl],['Pape
 const applyEvent=(it,r)=>{Object.assign(it,r.midsnapped);
  if(r.log){const i=logCache.findIndex(x=>x.id===r.log.id);if(i<0)logCache.push(r.log);else logCache[i]=r.log}
  showHist();showReady()};
-function qPrint(it,btn){if(busy)return;printTarget=it;
- if(SERVER_PRINT)return doPrint(it,btn);
+let printBtn=null;
+function qPrint(it,btn){if(busy)return;printTarget=it;printBtn=btn||null;
  const d=$('pdlg');if(d.showModal){fillDlg();d.showModal()}else doPrint(it,btn)}
-$('pdgo').onclick=()=>{$('pdlg').close();doPrint(printTarget)};
+$('pdgo').onclick=()=>{$('pdlg').close();doPrint(printTarget,printBtn)};
 $('pdcancel').onclick=()=>$('pdlg').close();
-/* The print is always 4 x 6 in, glossy photo paper, high quality, borderless. A server with a printer applies
-   all of that itself; a browser can only apply the size and the margins, so it shows a reminder first. */
+/* Print opens the browser's own print overlay with the strip at 4 x 6 in, no margins. A browser cannot choose
+   the paper type or the quality, so a reminder is shown first. */
 async function doPrint(it,btn){if(busy||!it)return;setBusy(btn||null,true);qsay('Preparing print…');await tick();
  const sz=SZ,r=await outItem(it,'png',sz.mmw,sz.mmh,[600,300]);
  if(!r){setBusy(btn||null,false);return qsay('The print image could not be prepared.')}
- const n=prefs.copies;
- if(SERVER_PRINT){
-  try{qsay('Sending to the printer…');
-   const fd=new FormData();fd.append('image',r.blob,'strip.png');fd.append('copies',String(n));
-   applyEvent(it,await api('POST',`/api/midsnapped/${it.id}/print`,fd));
-   qsay(`Sent to the printer: ${SZ.lbl}, ${PAPER[prefs.paper]}, ${QUAL[prefs.quality]}, borderless.`)}
-  catch(e){qsay('Could not print: '+e.message)}
-  return setBusy(btn||null,false)}
- setBusy(btn||null,false);
+ const n=prefs.copies;setBusy(btn||null,false);
  const u=URL.createObjectURL(r.blob);
  $('pstyle').textContent=`@page{size:${sz.w} ${sz.h};margin:0}@media print{#pr .pg{width:${sz.w};height:${sz.h};padding:0;box-sizing:border-box;overflow:hidden;break-after:page}#pr .pg:last-child{break-after:auto}#pr .pg img{width:100%;height:100%;object-fit:fill;display:block}}`;
  const pr=$('pr');pr.innerHTML='';const g=document.createElement('div');g.className='pg';const im=new Image();im.alt='Photostrip';
@@ -304,6 +305,10 @@ async function doPrint(it,btn){if(busy||!it)return;setBusy(btn||null,true);qsay(
  await new Promise(ok=>requestAnimationFrame(()=>requestAnimationFrame(ok)));qsay('');window.print();
  try{applyEvent(it,await api('POST',`/api/midsnapped/${it.id}/events`,{kind:'print',copies:n}))}catch(e){qsay('Printed, but the count could not be saved: '+e.message)}}
 const fdt=t=>t?`${dstr(t)} ${tstr(t).slice(0,5)}`:'–';
+/* "tomorrow 12:52 PM" style time for the online-copy expiry */
+function whenTxt(t){const d=new Date(t),n=new Date(),day=x=>new Date(x.getFullYear(),x.getMonth(),x.getDate()),diff=Math.round((day(d)-day(n))/864e5),
+ tm=d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true});
+ return(diff===0?'today':diff===1?'tomorrow':'on '+dstr(t))+' '+tm}
 function liveLink(it){if(it.link&&!(it.linkExp>Date.now())){it.link=null;it.linkExp=null}return it.link||null}
 /* a saved strip's frame and photos are fetched from the server the first time it is rendered */
 async function hydrate(it){if(it._hy)return;
@@ -311,8 +316,9 @@ async function hydrate(it){if(it._hy)return;
  it.fb=await g(`/api/snaps/${it.id}/frame`);
  it.rows=await Promise.all(it.layout.map(async(c,i)=>({b:c.has?await g(`/api/snaps/${it.id}/photos/${i}`):null,z:c.z||1,ox:c.ox||0,oy:c.oy||0})));
  it._hy=true}
-async function qQr(it,btn){it._open=!it._open;if(!it._open||liveLink(it)||it._busy){showReady();return}
- it._busy=true;it._msg='';showReady();qsay('Uploading your photostrip…');
+async function qQr(it,btn){
+ if(liveLink(it)){it._open=!it._open;showReady();return}                 /* link exists: Show / Hide QR code */
+ if(it._busy)return;it._open=true;it._busy=true;it._msg='';showReady();qsay('Uploading your photostrip…');
  try{const cap=(BOOT.share&&BOOT.share.max)||1e7;let r=await outItem(it,'png',MM_W,MM_H,[600,300]);   /* high-quality PNG; 300 dpi only if Cloudinary's size limit needs it */
   if(r&&r.blob.size>cap)r=await outItem(it,'png',MM_W,MM_H,[300,200])||r;if(!r)throw new Error('could not render the strip');
   const fd=new FormData();fd.append('image',r.blob,'strip.png');
@@ -324,29 +330,64 @@ async function qUnlink(it){try{await api('DELETE',`/api/midsnapped/${it.id}/shar
 async function qRemove(it){if(busy)return;if(!await askConfirm('Remove from MIDSnapped','Remove this strip from MIDSnapped? Its record, counts and online copy are deleted, so its QR code stops working.'))return;
  try{await api('DELETE',`/api/midsnapped/${it.id}`)}catch(e){return qsay('Could not remove the strip: '+e.message)}
  readyQ=readyQ.filter(o=>o!==it);showReady();qsay('Removed from MIDSnapped.')}
-function showReady(){const el=$('qlist');el.innerHTML='';const has=readyQ.length>0,fmU='PNG';
+/* ---- MIDSnapped rows (click one to open its popup) and the strip popup ---- */
+let popItem=null;
+function ago(t){const s=Math.max(0,(Date.now()-t)/1000);if(s<45)return'just now';const m=Math.round(s/60);if(m<60)return m<=1?'1 minute ago':m+' minutes ago';
+ const h=Math.round(m/60);if(h<24)return h===1?'1 hour ago':h+' hours ago';const d=Math.round(h/24);return d<=7?(d===1?'1 day ago':d+' days ago'):dstr(t)}
+function agoEl(t){const e=document.createElement('span');if(!t){e.textContent='–';return e}e.dataset.ago=t;e.title=fdt(t);e.textContent=ago(t);return e}
+setInterval(()=>document.querySelectorAll('[data-ago]').forEach(e=>{e.textContent=ago(+e.dataset.ago)}),20000);
+const mkb=(t,fn,cls)=>{const x=document.createElement('button');x.type='button';x.className=cls||'sm';x.textContent=t;x.onclick=e=>fn(e.currentTarget);return x};
+const cnt=(lbl,n,times)=>{const c=document.createElement('span');c.className='chip '+(n>0?'on':'zero');c.textContent=`${n} ${lbl}`;if(times&&times.length)c.title=times.map(fdt).join('\n');return c};
+function lastLine(it){const ls=[['Last downloaded: ',it.lastDl],['Last printed: ',it.lastPr]].filter(l=>l[1]);if(!ls.length)return null;
+ const d=document.createElement('div');d.className='hint lastl';d.style.margin='0';
+ ls.forEach(([l,t])=>{const r=document.createElement('div');r.append(l,agoEl(t));d.append(r)});return d}
+function thumb(it){const im=new Image();im.src=it.t;im.alt='MIDSnapped strip '+(it.code||'');im.className='qt';im.draggable=false;im.onload=im.onerror=()=>fitList();return im}
+async function copyText(t){try{await navigator.clipboard.writeText(t);return true}catch{}
+ try{const a=document.createElement('textarea');a.value=t;a.setAttribute('readonly','');a.style.cssText='position:fixed;left:0;top:0;opacity:0';
+  ($('sdlg').open?$('sdlg'):document.body).append(a);a.select();const ok=document.execCommand('copy');a.remove();return ok}catch{return false}}
+function fitList(){const el=$('qlist'),k=[...el.children];el.style.maxHeight='';el.classList.toggle('scroll',k.length>=5);
+ if(k.length>=5){const l=k[4];el.style.maxHeight=(l.offsetTop+l.offsetHeight)+'px'}}
+addEventListener('resize',()=>fitList());
+function showReady(){const el=$('qlist');el.innerHTML='';const has=readyQ.length>0;
+ const qs=$('qstats');qs.innerHTML='';{const d=document.createElement('div'),b=document.createElement('b');d.className='stat';b.textContent=readyQ.length;d.append(b,'MIDSnapped photostrips');qs.append(d)}
  $('qempty').style.display=has?'none':'';
- const mk=(t,fn,cls)=>{const x=document.createElement('button');x.className=cls||'sm';x.textContent=t;x.onclick=e=>fn(e.currentTarget);return x};
  readyQ.forEach(it=>{
-  const lk=liveLink(it);
-  const w=document.createElement('div');w.className='qi';const im=new Image();im.src=it.t;im.alt='MIDSnapped strip';im.className='qt';im.draggable=false;
-  const m=document.createElement('div'),tp=document.createElement('div');m.className='qm';tp.className='qtop';
-  const b=document.createElement('b');b.textContent=`${dstr(it.ts)} ${tstr(it.ts).slice(0,5)}`;
-  const ch=document.createElement('span');ch.className='qchips';[[`Downloaded ${it.dl}×`,it.dl,(it.dlt||[]).map(fdt).join('\n')],[`Printed ${it.pr}×`,it.pr,(it.prt||[]).map(fdt).join('\n')],[lk?'Online copy ready':'',lk,lk?'Expires '+fdt(it.linkExp):'']].forEach(([t,v,tt])=>{if(!t)return;const c=document.createElement('span');c.className='chip'+(v?' ok':'');c.textContent=t;if(tt)c.title=tt;ch.append(c)});
-  tp.append(b,ch);
-  const st=document.createElement('div');st.className='hint';st.style.margin='0';st.textContent=`Last downloaded: ${fdt(it.lastDl)} · Last printed: ${fdt(it.lastPr)}`;
-  const a=document.createElement('div');a.className='qa';
-  a.append(mk('Download '+fmU,x=>qDownload(it,x),'main sm'),mk('Print',x=>qPrint(it,x)),mk('Edit',()=>editStrip(it)),mk(it._open?'Hide QR code':'QR code',x=>qQr(it,x)),mk('Remove',()=>qRemove(it)));
-  m.append(tp,st,a);w.append(im,m);
-  if(it._open){const q=document.createElement('div');q.className='qr';
-   if(it._busy)q.textContent='Creating your download link…';
-   else if(lk){const c=document.createElement('canvas');drawQR(c,lk);const t=document.createElement('div');t.className='hint';t.textContent='Scan with a phone camera to download the photostrip';
-    const l=document.createElement('div');l.className='lnk';l.textContent=lk;const r=document.createElement('div');r.className='qa';r.style.justifyContent='center';
-    r.append(mk('Copy link',()=>{navigator.clipboard&&navigator.clipboard.writeText(lk).then(()=>qsay('Link copied.'),()=>qsay('Could not copy the link.'))}),mk('Delete online copy',()=>qUnlink(it)));
-    const n=document.createElement('div');n.className='hint';n.textContent=`Customers can download the strip from this link until ${fdt(it.linkExp)}. It is deleted automatically after ${BOOT.share&&BOOT.share.hours||24} hours. Delete the online copy sooner if you no longer need it.`;q.append(c,t,l,r,n)}
-   else q.textContent=it._msg||'Preparing…';
-   w.append(q)}
-  el.append(w)})}
+  const w=document.createElement('div');w.className='qi';w.tabIndex=0;w.setAttribute('role','button');w.setAttribute('aria-label','Open strip '+(it.code||''));w.title='Click to download, print or get a QR code';
+  const m=document.createElement('div'),tp=document.createElement('div'),hd=document.createElement('div');m.className='qm';tp.className='qtop';hd.className='qh';
+  const idb=document.createElement('b');idb.className='sid2';idb.textContent=it.code||'';const wh=agoEl(it.ts);wh.className='when';hd.append(idb,wh);
+  const ch=document.createElement('span');ch.className='qchips';ch.append(cnt('Downloaded',it.dl,it.dlt),cnt('Printed',it.pr,it.prt));
+  const lk=liveLink(it);if(lk){const c=document.createElement('span');c.className='chip ok';c.textContent='Online copy ready';c.title='Expires '+fdt(it.linkExp);ch.append(c)}
+  tp.append(hd,ch);
+  const a=document.createElement('div');a.className='qa';a.append(mkb('Edit',()=>editStrip(it)),mkb('Remove',()=>qRemove(it)));a.onclick=e=>e.stopPropagation();
+  m.append(...[tp,lastLine(it),a].filter(Boolean));w.append(thumb(it),m);
+  w.onclick=()=>openStrip(it);w.onkeydown=e=>{if((e.key==='Enter'||e.key===' ')&&e.target===w){e.preventDefault();openStrip(it)}};
+  el.append(w)});
+ fitList();if(popItem&&$('sdlg').open)renderPop()}
+function openStrip(it){popItem=it;renderPop();const d=$('sdlg');if(!d.open)d.showModal()}
+function closePop(){const d=$('sdlg');popItem=null;if(d.open)d.close()}
+$('sdlg').addEventListener('click',e=>{if(e.target===$('sdlg'))closePop()});
+$('sdlg').addEventListener('close',()=>{popItem=null});
+wset($('sdx'),I.x,'Close');$('sdx').onclick=closePop;
+function renderPop(){const it=popItem;if(!it)return;if(!readyQ.includes(it))return closePop();
+ const lk=liveLink(it),b=$('sdb');$('sdt').textContent='Strip';$('sdid').textContent=it.code||'';b.innerHTML='';
+ const pi=document.createElement('div'),pm=document.createElement('div'),ch=document.createElement('span');pi.className='pi';pm.className='pm';ch.className='qchips';
+ const wh=agoEl(it.ts);wh.className='when';ch.append(cnt('Downloaded',it.dl,it.dlt),cnt('Printed',it.pr,it.prt));
+ if(lk){const c=document.createElement('span');c.className='chip ok';c.textContent='Online copy ready';c.title='Expires '+fdt(it.linkExp);ch.append(c)}
+ pm.append(...[wh,ch,lastLine(it)].filter(Boolean));pi.append(thumb(it),pm);
+ const a=document.createElement('div');a.className='qa pa';
+ a.append(mkb('Download PNG',x=>qDownload(it,x,'png'),'main sm'),mkb('Download JPG',x=>qDownload(it,x,'jpg')),
+  mkb(lk?(it._open?'Hide QR code':'Show QR code'):'Generate QR code',x=>qQr(it,x)),mkb('Print',x=>qPrint(it,x)));
+ b.append(pi,a);
+ if(it._open){const q=document.createElement('div');q.className='qr';
+  if(it._busy)q.textContent='Creating your download link…';
+  else if(lk){const c=document.createElement('canvas');drawQR(c,lk);const t=document.createElement('div');t.className='hint';t.textContent='Scan with a phone camera to download the photostrip';
+   const l=document.createElement('div');l.className='lnk';l.textContent=lk;const r=document.createElement('div');r.className='qa';
+   r.append(mkb('Copy link',async x=>{const ok=await copyText(lk);x.textContent=ok?'Link copied ✓':'Copy failed';x.classList.toggle('copied',ok);
+     qsay(ok?'Link copied to the clipboard.':'Could not copy the link. Select it and copy it by hand.');clearTimeout(x._t);x._t=setTimeout(()=>{x.textContent='Copy link';x.classList.remove('copied')},2200)}),mkb('Delete online copy',()=>qUnlink(it)));
+   const n=document.createElement('div');n.className='hint';n.textContent=`You can download the strip from this link until ${whenTxt(it.linkExp)}. It will get deleted automatically after ${BOOT.share&&BOOT.share.hours||24} hours. Delete the online copy sooner if you no longer need it.`;q.append(c,t,l,r,n)}
+  else q.textContent=it._msg||'Preparing…';
+  b.append(q)}
+ }
 
 /* ---- photo log: kept in MySQL, tracked live ---- */
 const hist=()=>logCache;
@@ -366,7 +407,7 @@ $('end').onclick=async()=>{if(busy)return;const n=rows.filter(r=>r.img).length;i
  const c=document.createElement('canvas');c.width=204;c.height=304;render(c,false);
  const tb=await new Promise(r=>c.toBlob(r,'image/jpeg',.6));
  const rowsData=rows.map(r=>({b:r.blob||null,z:r.z,ox:r.ox,oy:r.oy}));
- const fd=new FormData();fd.append('meta',JSON.stringify({name:frame.name,layout:rowsData.map(r=>({has:!!r.b,z:r.z,ox:r.ox,oy:r.oy}))}));
+ const fd=new FormData();fd.append('meta',JSON.stringify({name:frame.name,code:curId,layout:rowsData.map(r=>({has:!!r.b,z:r.z,ox:r.ox,oy:r.oy}))}));
  fd.append('thumb',tb,'thumb.jpg');fd.append('frame',frame.file,frame.name);rowsData.forEach((r,i)=>{if(r.b)fd.append('photo'+i,r.b,'photo'+i)});
  setBusy($('end'),true);osay('Saving to MIDSnapped…');let res;
  try{res=await api('POST','/api/snaps',fd)}catch(e){setBusy($('end'),false);return osay('Could not save this strip: '+e.message)}
@@ -374,7 +415,7 @@ $('end').onclick=async()=>{if(busy)return;const n=rows.filter(r=>r.img).length;i
  const it={...res.midsnapped,fb:frame.file,rows:rowsData,fr:frame,_hy:true};
  readyQ=[it,...readyQ.filter(o=>o.id!==it.id)];logCache=[...logCache,res.log];
  rows.forEach(wipe);sess={dt:[],pt:[],pd:null};buildSlots();redraw();persist();showHist();showReady();
- qsay('Added to MIDSnapped. Download, print or share it from here.');$('cReady').scrollIntoView({behavior:'smooth',block:'nearest'})};
+ newCurId();qsay('Added to MIDSnapped as '+it.code+'.');openStrip(it)};
 $('ch').onclick=async()=>{if(await askConfirm('Clear photo log','Delete the whole photo log? Download the CSV first if you need it.')){try{await api('DELETE','/api/log')}catch(err){return osay(err.message)}logCache=[];showHist()}};
 function stats(h){const hr={};h.forEach(e=>{const k=new Date(e.ts).getHours();hr[k]=(hr[k]||0)+1});const pk=Object.entries(hr).sort((a,b)=>b[1]-a[1])[0];
  return{shoots:h.length,photos:h.reduce((s,e)=>s+e.n,0),dl:h.reduce((s,e)=>s+e.d,0),pr:h.reduce((s,e)=>s+e.p,0),peak:pk?new Date(2000,0,1,+pk[0]).toLocaleTimeString([],{hour:'numeric'}):'–'}}
@@ -408,7 +449,7 @@ async function editStrip(e){if(busy)return;
  await loadFrame(e.fb,e.name,false,true);
  if(!frame||frame.name!==e.name)return;
  await applyRows(e.rows);redraw();updateLive();$('cFrame').scrollIntoView({behavior:'smooth',block:'start'});
- osay('Strip opened for editing. Press MIDSnap-it to save the changes as a new strip.')}
+ newCurId();osay('Strip opened for editing. Press MIDSnap-it to save the changes as a new strip.')}
 
 /* ---- startup: restore the frame and the photoshoot in progress ---- */
 async function restore(){
@@ -424,7 +465,8 @@ const setIc=(b,col)=>wset(b,col?I.plus:I.min,col?'Expand':'Collapse');
 document.querySelectorAll('.card:not(.hist)').forEach(c=>{const ch=c.querySelector(':scope>.ch'),cb=c.querySelector(':scope>.cb');if(!ch||!cb)return;
  const w=document.createElement('div');w.className='cw';c.insertBefore(w,cb);w.append(cb);c.classList.add('open');
  const bs=document.createElement('span');bs.className='wbs';const b=document.createElement('button');b.className='wb';b.type='button';setIc(b,false);b.setAttribute('aria-expanded','true');bs.append(b);ch.append(bs);
- b.onclick=()=>{const col=!c.classList.contains('col');c.classList.toggle('col',col);b.setAttribute('aria-expanded',String(!col));setIc(b,col);if(col)c.classList.remove('open');else setTimeout(()=>c.classList.add('open'),320)}});
+ b.onclick=()=>{const col=!c.classList.contains('col');c.classList.toggle('col',col);b.setAttribute('aria-expanded',String(!col));setIc(b,col);if(col)c.classList.remove('open');else setTimeout(()=>c.classList.add('open'),320)};
+ if(c.id==='cOut'){c.classList.add('col');c.classList.remove('open');b.setAttribute('aria-expanded','false');setIc(b,true)}});
 const BGD=[['star',2,16,46,-12,7,0,.85],['flower',4,46,54,10,8,1,.8],['sparkle',1.5,76,40,0,6,.5,.9],['clover',5,90,48,14,9,2,.8],
  ['star',95,12,40,10,6.5,1,.85],['sparkle',93,38,52,0,7,0,.9],['flower',96,64,50,-8,8,1.5,.8],['star',92,88,44,-14,7,.5,.85],
  ['sparkle',9,6,30,0,5,2,.8],['star',88,4,30,8,5.5,.3,.8],['clover',10,96,34,-10,8,1,.7],['flower',50,97,36,0,9,2,.6]];
