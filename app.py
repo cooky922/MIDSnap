@@ -292,6 +292,18 @@ def healthz():
     return jsonify(ok=True)
 
 
+@app.get('/api/sync')
+def sync_state():
+    """Lightweight state snapshot so other open devices reflect changes without refreshing."""
+    ms_list = midsnapped_items()
+    lg_list = log_items()
+    payload = {'midsnapped': ms_list, 'log': lg_list}
+    sig = hashlib.sha1(json.dumps(payload, sort_keys=True).encode('utf-8')).hexdigest()
+    resp = jsonify(sig=sig, midsnapped=ms_list, log=lg_list)
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+
 def read_upload(field, limit):
     f = request.files.get(field)
     data = f.read(limit + 1) if f else b''
@@ -515,9 +527,6 @@ def delete_share(uid):
     for r in rows:
         run('DELETE FROM share_links WHERE id=%s', (r['id'],))
     return '', 204
-
-
-
 
 
 # ---- photo log

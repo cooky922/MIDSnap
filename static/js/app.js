@@ -286,7 +286,7 @@ async function qDownload(it,btn,fm){fm=fm==='jpg'?'jpg':'png';if(busy)return;set
 function fillDlg(){const t=$('pdt');t.innerHTML='';[['Paper size',SZ.lbl],['Paper type',PAPER[prefs.paper]],['Quality',QUAL[prefs.quality]],['Borderless margin',prefs.borderless?'On':'Off']].forEach(([a,b])=>{const tr=document.createElement('tr'),x=document.createElement('td'),y=document.createElement('td');x.textContent=a;y.textContent=b;tr.append(x,y);t.append(tr)})}
 const applyEvent=(it,r)=>{Object.assign(it,r.midsnapped);
  if(r.log){const i=logCache.findIndex(x=>x.id===r.log.id);if(i<0)logCache.push(r.log);else logCache[i]=r.log}
- showHist();showReady()};
+ lastSyncSig='';showHist();showReady()};
 let printBtn=null;
 function qPrint(it,btn){if(busy)return;printTarget=it;printBtn=btn||null;
  const d=$('pdlg');if(d.showModal){fillDlg();d.showModal()}else doPrint(it,btn)}
@@ -322,14 +322,14 @@ async function qQr(it,btn){
  try{const cap=(BOOT.share&&BOOT.share.max)||1e7;let r=await outItem(it,'png',MM_W,MM_H,[600,300]);   /* high-quality PNG; 300 dpi only if Cloudinary's size limit needs it */
   if(r&&r.blob.size>cap)r=await outItem(it,'png',MM_W,MM_H,[300,200])||r;if(!r)throw new Error('could not render the strip');
   const fd=new FormData();fd.append('image',r.blob,'strip.png');
-  const s=await api('POST',`/api/midsnapped/${it.id}/share`,fd);it.link=s.url;it.linkExp=s.expires}
+  const s=await api('POST',`/api/midsnapped/${it.id}/share`,fd);it.link=s.url;it.linkExp=s.expires;lastSyncSig=''}
  catch(e){it._msg='Could not create the download link: '+(e.message||'unknown error')}
  it._busy=false;showReady();qsay(it.link?'Download link ready. It works for '+((BOOT.share&&BOOT.share.hours)||24)+' hours.':it._msg)}
 async function qUnlink(it){try{await api('DELETE',`/api/midsnapped/${it.id}/share`)}catch(e){return qsay('Could not delete the online copy: '+e.message)}
- it.link=null;it.linkExp=null;it._open=false;showReady();qsay('Online copy deleted. Its QR code no longer works.')}
+ it.link=null;it.linkExp=null;it._open=false;lastSyncSig='';showReady();qsay('Online copy deleted. Its QR code no longer works.')}
 async function qRemove(it){if(busy)return;if(!await askConfirm('Remove from MIDSnapped','Remove this strip from MIDSnapped? Its record, counts and online copy are deleted, so its QR code stops working.'))return;
  try{await api('DELETE',`/api/midsnapped/${it.id}`)}catch(e){return qsay('Could not remove the strip: '+e.message)}
- readyQ=readyQ.filter(o=>o!==it);showReady();qsay('Removed from MIDSnapped.')}
+ readyQ=readyQ.filter(o=>o!==it);lastSyncSig='';showReady();qsay('Removed from MIDSnapped.')}
 /* ---- MIDSnapped rows (click one to open its popup) and the strip popup ---- */
 let popItem=null;
 function ago(t){const s=Math.max(0,(Date.now()-t)/1000);if(s<45)return'just now';const m=Math.round(s/60);if(m<60)return m<=1?'1 minute ago':m+' minutes ago';
@@ -397,7 +397,7 @@ const tstr=t=>{const d=new Date(t);return`${pad(d.getHours())}:${pad(d.getMinute
 const pl=(n,w)=>`${n} ${w}${n==1?'':'s'}`;
 const times=a=>(a&&a.length)?` (${a.map(tstr).join(', ')})`:'';
 function csv(){const q=s=>'"'+String(s).replace(/"/g,'""')+'"',j=a=>q((a||[]).map(t=>dstr(t)+' '+tstr(t)).join(' | '));
- return'﻿'+['shoot_id,date,time,frame,photos,downloads,prints,download_times,print_times,print_details',...hist().map((e,i)=>[i+1,dstr(e.ts),tstr(e.ts),q(e.f),e.n,e.d,e.p,j(e.dt),j(e.pt),q(pdStr(e.pd))].join(','))].join('\r\n')+'\r\n'}
+ return'\ufeff'+['shoot_id,date,time,frame,photos,downloads,prints,download_times,print_times,print_details',...hist().map((e,i)=>[i+1,dstr(e.ts),tstr(e.ts),q(e.f),e.n,e.d,e.p,j(e.dt),j(e.pt),q(pdStr(e.pd))].join(','))].join('\r\n')+'\r\n'}
 function report(){const h=hist(),s=stats(h);
  return['MIDSNAP PHOTO LOG',`Generated: ${dstr(Date.now())} ${tstr(Date.now())}`,'',`Photoshoots: ${s.shoots}`,`Photos taken: ${s.photos}`,`Strips downloaded: ${s.dl+sess.dt.length}`,`Strips printed: ${s.pr+sess.pt.length}`,'',
  ...h.map((e,i)=>`#${i+1}  ${dstr(e.ts)} ${tstr(e.ts)}  frame: ${e.f}  photos: ${e.n}  downloads: ${e.d}  prints: ${e.p}${times(e.pt)}  print details: ${pdStr(e.pd)}`)].join('\r\n')+'\r\n'}
@@ -413,10 +413,10 @@ $('end').onclick=async()=>{if(busy)return;const n=rows.filter(r=>r.img).length;i
  try{res=await api('POST','/api/snaps',fd)}catch(e){setBusy($('end'),false);return osay('Could not save this strip: '+e.message)}
  setBusy($('end'),false);osay('');
  const it={...res.midsnapped,fb:frame.file,rows:rowsData,fr:frame,_hy:true};
- readyQ=[it,...readyQ.filter(o=>o.id!==it.id)];logCache=[...logCache,res.log];
+ readyQ=[it,...readyQ.filter(o=>o.id!==it.id)];logCache=[...logCache,res.log];lastSyncSig='';
  rows.forEach(wipe);sess={dt:[],pt:[],pd:null};buildSlots();redraw();persist();showHist();showReady();
  newCurId();qsay('Added to MIDSnapped as '+it.code+'.');openStrip(it)};
-$('ch').onclick=async()=>{if(await askConfirm('Clear photo log','Delete the whole photo log? Download the CSV first if you need it.')){try{await api('DELETE','/api/log')}catch(err){return osay(err.message)}logCache=[];showHist()}};
+$('ch').onclick=async()=>{if(await askConfirm('Clear photo log','Delete the whole photo log? Download the CSV first if you need it.')){try{await api('DELETE','/api/log')}catch(err){return osay(err.message)}logCache=[];lastSyncSig='';showHist()}};
 function stats(h){const hr={};h.forEach(e=>{const k=new Date(e.ts).getHours();hr[k]=(hr[k]||0)+1});const pk=Object.entries(hr).sort((a,b)=>b[1]-a[1])[0];
  return{shoots:h.length,photos:h.reduce((s,e)=>s+e.n,0),dl:h.reduce((s,e)=>s+e.d,0),pr:h.reduce((s,e)=>s+e.p,0),peak:pk?new Date(2000,0,1,+pk[0]).toLocaleTimeString([],{hour:'numeric'}):'–'}}
 function syncBtns(){const has=rows.some(r=>r.img),ok=!!frame&&has,n=hist().length;
@@ -438,7 +438,43 @@ function showHist(){
   const ti=document.createElement('td');if(e.t){const im=new Image();im.src=e.t;im.alt='Strip';im.draggable=false;ti.append(im)}else ti.textContent='–';tr.append(ti);
   cell(tr,dstr(e.ts));cell(tr,tstr(e.ts));cell(tr,e.f||'–');cell(tr,e.n,'n');cell(tr,e.d,'n');cell(tr,e.p,'n');
   cell(tr,(e.pt&&e.pt.length)?e.pt.map(tstr).join(', '):'–');cell(tr,pdStr(e.pd));
-  const ta=document.createElement('td'),x=document.createElement('button');x.className='sm';x.textContent='Delete';x.onclick=async()=>{try{await api('DELETE','/api/log/'+e.id)}catch(err){return osay(err.message)}logCache=logCache.filter(o=>o.id!==e.id);showHist()};ta.append(x);tr.append(ta);body.append(tr)})}
+  const ta=document.createElement('td'),x=document.createElement('button');x.className='sm';x.textContent='Delete';x.onclick=async()=>{try{await api('DELETE','/api/log/'+e.id)}catch(err){return osay(err.message)}logCache=logCache.filter(o=>o.id!==e.id);lastSyncSig='';showHist()};ta.append(x);tr.append(ta);body.append(tr)})}
+
+/* ---- live sync across devices without refreshing ---- */
+let lastSyncSig='',syncInFlight=false;
+async function liveSync(){
+ if(syncInFlight)return;
+ syncInFlight=true;
+ try{
+  const res=await api('GET','/api/sync');
+  if(!res||res.sig===lastSyncSig)return;
+  lastSyncSig=res.sig;
+
+  const oldMap=new Map(readyQ.map(it=>[it.id,it]));
+  const openId=popItem?popItem.id:null;
+
+  readyQ=(res.midsnapped||[]).map(fresh=>{
+   const prev=oldMap.get(fresh.id);
+   if(prev){
+    Object.assign(prev,fresh);
+    return prev;
+   }
+   return fresh;
+  });
+
+  if(openId){
+   popItem=readyQ.find(it=>it.id===openId)||null;
+  }
+
+  logCache=res.log||[];
+  showReady();
+  showHist();
+ }catch{}finally{
+  syncInFlight=false;
+ }
+}
+setInterval(liveSync,2500);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)liveSync()});
 
 /* ---- MIDSnapped strips can be reopened: the frame and photos come back on the strip, fully editable ---- */
 async function applyRows(list){for(let i=0;i<rows.length&&i<list.length;i++){const c=list[i],st=rows[i];st.z=c.z||1;st.ox=c.ox||0;st.oy=c.oy||0;
